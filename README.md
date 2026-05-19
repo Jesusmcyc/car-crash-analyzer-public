@@ -99,7 +99,7 @@ See [`progress.md`](progress.md) for a milestone-by-milestone narrative (M0 scaf
 
 Jesús Moreno · ML / Computer-Vision engineer · Mexico
 
-- **LinkedIn:** *TBD*
+- **LinkedIn:** [in/jesusmcyc](https://www.linkedin.com/in/jesusmcyc)
 - **GitHub:** [@Jesusmcyc](https://github.com/Jesusmcyc)
 - **Email:** available on request
 
