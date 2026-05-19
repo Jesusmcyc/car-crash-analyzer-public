@@ -1,0 +1,60 @@
+{
+  "generated_at": "2026-05-06T02:47:58.175173+00:00",
+  "test_split": {
+    "images": 374,
+    "annotations": 785
+  },
+  "baseline": {
+    "weights": "rtdetr-l.pt",
+    "map50": 0.0,
+    "map5095": 0.0,
+    "per_class": {},
+    "latency_ms": {
+      "mean": 581.2,
+      "p95": 602.3
+    },
+    "note": "Pretrained COCO \u2014 model.val() omitido: las 80 clases COCO no solapan las 6 clases CarDD; mAP=0.0 por construcci\u00f3n."
+  },
+  "finetuned": {
+    "weights": "models/rtdetr-cardd.pt",
+    "map50": 0.701,
+    "map5095": 0.5357,
+    "per_class": {
+      "dent": {
+        "precision": 0.664,
+        "recall": 0.5526,
+        "map50": 0.5906
+      },
+      "scratch": {
+        "precision": 0.5132,
+        "recall": 0.4601,
+        "map50": 0.5086
+      },
+      "crack": {
+        "precision": 0.6555,
+        "recall": 0.4623,
+        "map50": 0.5227
+      },
+      "broken_glass": {
+        "precision": 0.8028,
+        "recall": 0.9718,
+        "map50": 0.9664
+      },
+      "broken_lamp": {
+        "precision": 0.8621,
+        "recall": 0.6667,
+        "map50": 0.8188
+      },
+      "flat_tire": {
+        "precision": 0.6784,
+        "recall": 0.8438,
+        "map50": 0.799
+      }
+    },
+    "latency_ms": {
+      "mean": 614.0,
+      "p95": 624.0
+    }
+  },
+  "verdict": "deploy"
+}
