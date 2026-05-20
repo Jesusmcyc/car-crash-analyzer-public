@@ -1,38 +1,38 @@
-# ADR 0006 — Frontend en producción: nginx-alpine multi-stage, no `vite preview`
+# ADR 0006 — Frontend in production: nginx-alpine multi-stage, not `vite preview`
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-03
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-03
+**Author:** Jesús Moreno
 
-## Contexto
+## Context
 
-El frontend Vite genera assets estáticos. En el container que va a Coolify hay que servirlos. Opciones consideradas: `vite preview` (server dev de Vite), `serve`/`http-server` (Node), nginx-alpine, Caddy.
+The Vite frontend generates static assets. They have to be served from the container that ships to Coolify. Options considered: `vite preview` (Vite's dev server), `serve`/`http-server` (Node), nginx-alpine, Caddy.
 
-## Decisión
+## Decision
 
 Multi-stage Docker:
-- Builder `node:20-alpine` corre `npm ci && npm run build`.
-- Runtime `nginx:alpine` con `nginx.conf` propio — gzip, fallback SPA a `index.html`, cache headers (`immutable` para hashed assets, `no-cache` para `index.html`).
+- A `node:20-alpine` builder runs `npm ci && npm run build`.
+- A `nginx:alpine` runtime with its own `nginx.conf` — gzip, SPA fallback to `index.html`, cache headers (`immutable` for hashed assets, `no-cache` for `index.html`).
 
-Imagen final ~25 MB.
+Final image ~25 MB.
 
-## Consecuencias
+## Consequences
 
-### Positivas
-- Estándar de la industria para servir SPAs estáticas.
-- Configuración explícita de cache + gzip — crítico para un demo público.
-- Imagen runtime mínima; sin Node ni `node_modules` en producción.
-- nginx maneja conexiones concurrentes orders-of-magnitude mejor que un Node-server casual.
+### Positives
+- Industry standard for serving static SPAs.
+- Explicit cache + gzip configuration — critical for a public demo.
+- Minimal runtime image; no Node or `node_modules` in production.
+- nginx handles concurrent connections orders of magnitude better than a casual Node server.
 
-### Negativas
-- Una pieza más de configuración (`nginx.conf`) que mantener.
-- Cambios de SPA fallback rules requieren rebuild del image.
+### Negatives
+- One more piece of configuration (`nginx.conf`) to maintain.
+- Changes to SPA fallback rules require rebuilding the image.
 
-## Alternativas consideradas
+## Alternatives considered
 
-1. **`vite preview`.** Pensado solo para verificar el build, no para producción; la documentación de Vite lo dice. Rechazada.
-2. **Caddy.** TLS automático es atractivo, pero Coolify ya termina TLS; Caddy duplicaría responsabilidades. Rechazada.
-3. **`serve` (Node).** Funciona, pero arrastra Node y `node_modules` al runtime image (~120MB+ vs ~25MB). Rechazada.
+1. **`vite preview`.** Intended only to verify the build, not for production; the Vite documentation says so. Rejected.
+2. **Caddy.** Automatic TLS is attractive, but Coolify already terminates TLS; Caddy would duplicate responsibilities. Rejected.
+3. **`serve` (Node).** It works, but it drags Node and `node_modules` into the runtime image (~120MB+ vs ~25MB). Rejected.
 
-## Referencias
+## References
 - design doc sec D3.

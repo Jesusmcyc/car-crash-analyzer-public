@@ -1,65 +1,65 @@
-# ADR 0017 — Resultado del fine-tune RT-DETRv2 sobre CarDD: deploy
+# ADR 0017 — Result of the RT-DETRv2 fine-tune on CarDD: deploy
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-06
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-06
+**Author:** Jesús Moreno
 
-## Contexto
+## Context
 
-[ADR 0001](0001-pretrained-first.md) estableció en M0 que el pipeline corre con pesos preentrenados hasta M5, donde se fine-tunea RT-DETRv2 sobre CarDD y se decide si los pesos custom reemplazan a los preentrenados en producción. El spec M5 cerró con D7: thresholds **pre-comprometidos antes de ver números** para que el verdict sea defendible regardless del outcome:
+[ADR 0001](0001-pretrained-first.md) established in M0 that the pipeline runs on pretrained weights until M5, where RT-DETRv2 is fine-tuned on CarDD and the decision is made on whether the custom weights replace the pretrained ones in production. The M5 spec closed with D7: thresholds **pre-committed before seeing any numbers** so that the verdict is defensible regardless of the outcome:
 
-| Resultado | Acción |
+| Result | Action |
 |---|---|
 | mAP@0.5 ≥ 0.40 ∧ latency ≤ 1.2× baseline | **`deploy`** |
-| 0.20 ≤ mAP@0.5 < 0.40 | `publish_no_deploy` (quedarse con pretrained-mock) |
-| mAP@0.5 < 0.20 ∨ latency > 1.2× | `publish_with_diagnosis` (quedarse con pretrained-mock + diagnosticar) |
+| 0.20 ≤ mAP@0.5 < 0.40 | `publish_no_deploy` (keep pretrained-mock) |
+| mAP@0.5 < 0.20 ∨ latency > 1.2× | `publish_with_diagnosis` (keep pretrained-mock + diagnose) |
 
-Este ADR documenta el resultado real del experimento y la decisión derivada.
+This ADR documents the actual result of the experiment and the resulting decision.
 
-## Decisión
+## Decision
 
-**Verdict: `deploy`.** Los pesos `models/rtdetr-cardd.pt` reemplazan al pretrained `rtdetr-l.pt` en producción vía la env var `DETECTOR_WEIGHTS` configurada en Coolify (T9, sec D6 del spec M5).
+**Verdict: `deploy`.** The `models/rtdetr-cardd.pt` weights replace the pretrained `rtdetr-l.pt` in production via the `DETECTOR_WEIGHTS` env var configured in Coolify (T9, sec D6 of the M5 spec).
 
-Métricas del eval ([JSON crudo](../metrics/baseline-vs-finetuned.json), [narrativa](../metrics/baseline-vs-finetuned.md)):
+Eval metrics ([raw JSON](../metrics/baseline-vs-finetuned.json), [narrative](../metrics/baseline-vs-finetuned.md)):
 
-| Criterio D7 | Threshold | Real | Pasa |
+| D7 criterion | Threshold | Actual | Passes |
 |---|---|---|---|
 | mAP@0.5 (test split) | ≥ 0.40 | **0.701** | ✓ |
 | Latency ratio (CPU warm) | ≤ 1.2× | **1.057×** | ✓ |
 
-Per-class mAP@0.5: `broken_glass` 0.966, `broken_lamp` 0.819, `flat_tire` 0.799, `dent` 0.591, `crack` 0.523, `scratch` 0.509. Detalle en [`baseline-vs-finetuned.md`](../metrics/baseline-vs-finetuned.md#per-class).
+Per-class mAP@0.5: `broken_glass` 0.966, `broken_lamp` 0.819, `flat_tire` 0.799, `dent` 0.591, `crack` 0.523, `scratch` 0.509. Detail in [`baseline-vs-finetuned.md`](../metrics/baseline-vs-finetuned.md#per-class).
 
-## Consecuencias
+## Consequences
 
-### Positivas
+### Positives
 
-- **Categorías reales del dominio.** Las clases predichas por el detector ya son las del enum `DamageType` (`dent`, `scratch`, etc.) — no proxies COCO traducidos por `coco_to_damage_type` (placeholder M2). El [ADR 0008](0008-rtdetr-vs-yolo.md) anticipó este reemplazo; D8 del spec M5 dejó el detector listo para servirlo sin más cambios runtime (commit [`2f8c8b8`](https://github.com/Jesusmcyc/car-crash-analyzer/commit/2f8c8b8)).
-- **mAP agregado en territorio production-grade.** 0.701 supera por amplio margen el floor de 0.40 que el spec definió como "se siente útil en demo". La probabilidad de que una imagen de demo aleatoria muestre detecciones correctas es alta.
-- **Latencia preservada.** El delta de 32 ms (5.7%) es despreciable para el target del demo (~3 s warm). El backbone es el mismo que el pretrained; solo cambian los pesos.
-- **El roadmap del proyecto se cumplió.** [ADR 0001](0001-pretrained-first.md) prometió "el fallback obvio: si el fine-tune no mejora la baseline preentrenada, el sistema funciona igual con los pesos originales". El fine-tune sí mejoró, por lo tanto se despliega — pero el rollback documentado en spec D6 (borrar la env var, redeploy, queda pretrained-mock) sigue disponible si algo se descubre en post-deploy.
+- **Real domain categories.** The classes predicted by the detector are now those of the `DamageType` enum (`dent`, `scratch`, etc.) — not COCO proxies translated by `coco_to_damage_type` (the M2 placeholder). [ADR 0008](0008-rtdetr-vs-yolo.md) anticipated this replacement; D8 of the M5 spec left the detector ready to serve it with no further runtime changes (commit [`2f8c8b8`](https://github.com/Jesusmcyc/car-crash-analyzer/commit/2f8c8b8)).
+- **Aggregate mAP in production-grade territory.** 0.701 clears the 0.40 floor that the spec defined as "feels useful in a demo" by a wide margin. The probability that a random demo image shows correct detections is high.
+- **Latency preserved.** The 32 ms delta (5.7%) is negligible for the demo target (~3 s warm). The backbone is the same as the pretrained one; only the weights change.
+- **The project roadmap was fulfilled.** [ADR 0001](0001-pretrained-first.md) promised "the obvious fallback: if the fine-tune does not improve the pretrained baseline, the system works just the same with the original weights". The fine-tune did improve, so it ships — but the rollback documented in spec D6 (delete the env var, redeploy, fall back to pretrained-mock) remains available if something is discovered post-deploy.
 
-### Negativas
+### Negatives
 
-- **Brecha per-class entre clases con bordes vs. textura.** `broken_glass`/`broken_lamp`/`flat_tire` están en mAP ≥ 0.80; `dent`/`crack`/`scratch` en 0.50-0.59. Esto no invalida el verdict — el agregado supera el threshold y el comportamiento es coherente con la naturaleza de los daños — pero el demo presenta tres tiers de confianza implícitos que el frontend debería visibilizar (caveat al usuario cuando `confidence < 0.6`).
-- **`flat_tire` 0.799 tiene varianza estadística alta.** Solo 32 instancias en test split (la clase con menos samples). El intervalo de confianza informal está alrededor de ±0.10 — un test split aleatorio diferente podría mostrar mAP de 0.65-0.85. La narrativa del demo debe comunicar "≥ 0.70 en test" en lugar de citar el 0.799 como número definitivo. Detalle en [`baseline-vs-finetuned.md` sec Per-class](../metrics/baseline-vs-finetuned.md#per-class).
-- **No medimos overfitting cuantitativamente.** El reporte solo incluye test split. Val split (810 imgs, mAP@0.5 = 0.700 según el último epoch del training) está implícito en los plots de Ultralytics dentro de `rtdetr_cardd_run1/` en Drive. El hecho de que test (0.701) y val (0.700) sean prácticamente idénticos sugiere generalización buena, pero no se commiteó como métrica formal.
-- **Wall-clock de training real subestimado por el spec.** Spec D3 estimó "~2-3 h en Colab T4". El tiempo de `model.train()` puro fue **1.234 h (74 min)** según `results.csv`, pero el wall-clock total con setup overhead × 2 sesiones (clone, pip, drive mount, label scan) y el gap del disconnect estuvo en **~2-3 h**. El segundo intento requirió pagar Pay As You Go ($10 USD = 100 compute units, 8 consumed) para destrabar la cuota.
-### Neutrales / followups
+- **Per-class gap between edge-bound classes and texture-bound classes.** `broken_glass`/`broken_lamp`/`flat_tire` sit at mAP ≥ 0.80; `dent`/`crack`/`scratch` at 0.50-0.59. This does not invalidate the verdict — the aggregate clears the threshold and the behavior is consistent with the nature of the damage — but the demo presents three implicit confidence tiers that the frontend should surface (a caveat to the user when `confidence < 0.6`).
+- **`flat_tire` 0.799 has high statistical variance.** Only 32 instances in the test split (the class with the fewest samples). The informal confidence interval is around ±0.10 — a different random test split could show mAP of 0.65-0.85. The demo narrative should communicate "≥ 0.70 on test" rather than citing 0.799 as a definitive number. Detail in [`baseline-vs-finetuned.md` sec Per-class](../metrics/baseline-vs-finetuned.md#per-class).
+- **We did not measure overfitting quantitatively.** The report only includes the test split. The val split (810 imgs, mAP@0.5 = 0.700 according to the last training epoch) is implicit in the Ultralytics plots inside `rtdetr_cardd_run1/` on Drive. The fact that test (0.701) and val (0.700) are practically identical suggests good generalization, but it was not committed as a formal metric.
+- **Real training wall-clock underestimated by the spec.** Spec D3 estimated "~2-3 h on a Colab T4". The pure `model.train()` time was **1.234 h (74 min)** according to `results.csv`, but the total wall-clock with setup overhead × 2 sessions (clone, pip, drive mount, label scan) and the disconnect gap landed at **~2-3 h**. The second attempt required paying for Pay As You Go ($10 USD = 100 compute units, 8 consumed) to unblock the quota.
+### Neutral / follow-ups
 
-- **Class weights no aplicados** (decisión D3-diferida del spec). La siguiente iteración M5.5 podría añadirlos si se observa que `scratch`/`crack` son frecuentes en uso real y sus mAPs limitan la utilidad. No bloquea T9.
-- **`APP_VERSION` en Coolify aún sin inyectar** (heredado de M4). El smoke post-deploy de T9 acepta `model_version: "rtdetr-cardd-unknown"` como verde provisorio per la cláusula del spec (sec 348). Fix de 1 línea en la UI de Coolify, no bloquea.
+- **Class weights not applied** (a D3-deferred decision in the spec). The next iteration, M5.5, could add them if `scratch`/`crack` turn out to be frequent in real usage and their mAPs limit usefulness. Does not block T9.
+- **`APP_VERSION` in Coolify still not injected** (inherited from M4). The T9 post-deploy smoke test accepts `model_version: "rtdetr-cardd-unknown"` as a provisional green per the spec clause (sec 348). A 1-line fix in the Coolify UI; does not block.
 
-## Alternativas consideradas
+## Alternatives considered
 
-1. **Quedarse con pretrained-mock COCO + `coco_to_damage_type` (verdict `publish_no_deploy`).** Rechazada — el threshold D7 (mAP@0.5 ≥ 0.40) se superó con holgura. Mantener pretrained sería honestidad sobre un dato falso (el pretrained-mock no reporta su mAP real porque no tiene clases CarDD; D7 ya cubre ese argumento).
-2. **Esperar a una segunda corrida con class weights antes de desplegar.** Rechazada — el verdict actual ya cumple criterios deploy. Una corrida con class weights es valiosa como M5.5 pero retrasarse 1-2 días más en deployar el peso ya entrenado no aporta — el peso actual genera valor de demo desde el momento que aterriza en Coolify.
-3. **Entrenar más epochs (extender `epochs=50` a 100, `patience=20`).** Rechazada — Ultralytics disparó early-stop en epoch 40 con 10 epochs sin mejora desde epoch 30. Más epochs habrían sido tiempo y compute desperdiciado. El best.pt de epoch 30 captura el peak.
-4. **Backbone más grande (RT-DETR-x en lugar de -l).** Rechazada implícitamente por D3 del spec — el demo CPU-only del runtime de producción ya está cerca del techo de latencia tolerable con -l. -x agregaría ~50% latencia para una mejora estimada del orden de mAP +0.02-0.05; trade-off no justificado para un demo.
+1. **Keep pretrained-mock COCO + `coco_to_damage_type` (verdict `publish_no_deploy`).** Rejected — the D7 threshold (mAP@0.5 ≥ 0.40) was cleared comfortably. Keeping pretrained would be honesty about a false data point (pretrained-mock does not report its real mAP because it has no CarDD classes; D7 already covers that argument).
+2. **Wait for a second run with class weights before deploying.** Rejected — the current verdict already meets the deploy criteria. A run with class weights is valuable as M5.5, but delaying the deployment of the already-trained weights by another 1-2 days adds nothing — the current weights generate demo value from the moment they land in Coolify.
+3. **Train for more epochs (extend `epochs=50` to 100, `patience=20`).** Rejected — Ultralytics triggered early-stop at epoch 40 with 10 epochs of no improvement since epoch 30. More epochs would have been wasted time and compute. The best.pt from epoch 30 captures the peak.
+4. **A larger backbone (RT-DETR-x instead of -l).** Rejected implicitly by D3 of the spec — the CPU-only demo of the production runtime is already close to the ceiling of tolerable latency with -l. -x would add ~50% latency for an estimated improvement on the order of mAP +0.02-0.05; a trade-off not justified for a demo.
 
-## Referencias
+## References
 
-- [ADR 0001](0001-pretrained-first.md) — pretrained-first; este ADR cierra esa promesa.
-- [ADR 0008](0008-rtdetr-vs-yolo.md) — placeholder COCO→DamageType; obsoleto en uso pero `coco_to_damage_type` se mantiene como fallback (D8 spec M5).
-- spec M5 — D3 (hyperparams), D4 (eval), D6 (deploy), D7 (verdict thresholds).
-- [`Docs/metrics/baseline-vs-finetuned.json`](../metrics/baseline-vs-finetuned.json) — números crudos.
-- [`Docs/metrics/baseline-vs-finetuned.md`](../metrics/baseline-vs-finetuned.md) — interpretación per-class y desviaciones operativas.
+- [ADR 0001](0001-pretrained-first.md) — pretrained-first; this ADR closes that promise.
+- [ADR 0008](0008-rtdetr-vs-yolo.md) — COCO→DamageType placeholder; obsolete in use, but `coco_to_damage_type` is kept as a fallback (D8 of the M5 spec).
+- M5 spec — D3 (hyperparams), D4 (eval), D6 (deploy), D7 (verdict thresholds).
+- [`Docs/metrics/baseline-vs-finetuned.json`](../metrics/baseline-vs-finetuned.json) — raw numbers.
+- [`Docs/metrics/baseline-vs-finetuned.md`](../metrics/baseline-vs-finetuned.md) — per-class interpretation and operational deviations.

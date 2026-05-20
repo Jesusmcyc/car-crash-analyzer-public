@@ -1,76 +1,76 @@
-# ADR 0019 — Flip "no persistencia" para enabled continued training
+# ADR 0019 — Flipping "no persistence" to enable continued training
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-18
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-18
+**Author:** Jesús Moreno
 **Milestone:** M7
 
-## Contexto
+## Context
 
-`architecture doc` sec 11 listaba desde M0 entre los items out-of-scope:
+The `architecture doc` sec 11 had listed, since M0, among the out-of-scope items:
 
-> - Persistencia (DB). Las inferencias son fire-and-forget.
+> - Persistence (DB). Inferences are fire-and-forget.
 
-Esa restricción mantuvo el backend stateless durante M0–M6: el endpoint `/api/analyze` procesa la imagen en memoria, devuelve el reporte JSON, y libera todos los recursos. Cero archivos persistidos, cero DB. Fue una decisión correcta para los milestones de modelado (M0–M5) y entrega de portfolio (M6).
+That restriction kept the backend stateless throughout M0–M6: the `/api/analyze` endpoint processes the image in memory, returns the JSON report, and releases all resources. Zero persisted files, zero DB. It was the correct decision for the modeling milestones (M0–M5) and the portfolio delivery (M6).
 
-M7 introduce la feature de **continued training** sobre imágenes donadas voluntariamente por los visitantes del demo público. Las decisiones M7 (spec D2 + D3) requieren persistir el subset de imágenes con consentimiento expreso (LFPDPPP), junto con metadata (`sha256`, `uploaded_at`, `consent_version`, `subscriber_id` opcional) y el email del donante para notificación post-training (D7).
+M7 introduces the **continued training** feature on images voluntarily donated by visitors of the public demo. The M7 decisions (spec D2 + D3) require persisting the subset of images with express consent (LFPDPPP), together with metadata (`sha256`, `uploaded_at`, `consent_version`, optional `subscriber_id`) and the donor's email for post-training notification (D7).
 
-La restricción "no persistencia" del scope original debe levantarse de forma controlada para este subset, sin abrir la puerta a persistir todas las inferencias.
+The "no persistence" restriction from the original scope must be lifted in a controlled way for this subset, without opening the door to persisting every inference.
 
-## Decisión
+## Decision
 
-**La restricción "no persistencia" se levanta SOLO para imágenes con `consent=true` explícito.** El resto del pipeline sigue stateless como hasta hoy:
+**The "no persistence" restriction is lifted ONLY for images with an explicit `consent=true`.** The rest of the pipeline stays stateless as it is today:
 
-| Caso | Persistencia | Justificación |
+| Case | Persistence | Rationale |
 |---|---|---|
-| `/api/analyze` con `consent=false` (o sin el campo) | **No** | Backward compatible M5; fire-and-forget |
-| `/api/analyze` con `consent=true` y consent_version vigente | **Sí** | LFPDPPP — consentimiento expreso |
-| Logs estructurados de inferencia | No persistidos en DB | Loguru stdout, captura container-level |
-| Métricas operacionales agregadas | No persistidas | Out of scope M7 |
+| `/api/analyze` with `consent=false` (or no field) | **No** | Backward compatible with M5; fire-and-forget |
+| `/api/analyze` with `consent=true` and a current consent_version | **Yes** | LFPDPPP — express consent |
+| Structured inference logs | Not persisted in DB | Loguru stdout, container-level capture |
+| Aggregate operational metrics | Not persisted | Out of scope for M7 |
 
-**Stack de persistencia (detallado en ADR 0021):**
+**Persistence stack (detailed in ADR 0021):**
 
 - **SQLite** single-file (`/app/contributions/db.sqlite`), WAL mode.
-- **Volumen Docker** `contributions-images` montado en `/app/contributions/` (Coolify-orquestado, mismo patrón que `finetuned-models` de M5 T9).
-- **Sin Postgres, sin S3, sin Redis** — overkill para portfolio scale.
+- **Docker volume** `contributions-images` mounted at `/app/contributions/` (Coolify-orchestrated, the same pattern as `finetuned-models` from M5 T9).
+- **No Postgres, no S3, no Redis** — overkill for portfolio scale.
 
-**Scope original actualizado:** se mantiene el bullet "Persistencia (DB)" tachado en `architecture.md` con redirect explícito a este ADR. El operador que llegue cold al repo entiende el matiz desde la primera lectura.
+**Original scope updated:** the "Persistence (DB)" bullet is kept struck through in `architecture.md` with an explicit redirect to this ADR. An operator who arrives cold at the repo understands the nuance from the first read.
 
-## Consecuencias
+## Consequences
 
-### Positivas
+### Positives
 
-- **Continued training se vuelve viable.** Sin persistencia el ciclo de mejora del modelo dependía 100% del dataset CarDD original (4k imgs); con persistencia el ciclo se extiende a la comunidad del demo.
-- **Demo público gana feature diferenciable para portfolio.** "Una app que aprende de quien la usa" es highlight diferenciable en LinkedIn vs. otra demo CV genérica.
-- **Engagement narrativo para LinkedIn posts.** Cada nueva versión del modelo da material publicable: "v2 entrenó con N fotos donadas por la comunidad".
-- **Disciplina operativa demostrable.** Implementar consent, ARCO rights, EXIF stripping, withdrawal endpoint, retraining loop completo es trabajo "production-grade" que un revisor técnico senior reconoce — más fuerte que añadir más slides al deck.
+- **Continued training becomes viable.** Without persistence, the model improvement cycle depended 100% on the original CarDD dataset (4k imgs); with persistence, the cycle extends to the demo's community.
+- **The public demo gains a differentiating feature for the portfolio.** "An app that learns from whoever uses it" is a differentiating highlight on LinkedIn versus yet another generic CV demo.
+- **Narrative engagement for LinkedIn posts.** Each new version of the model provides publishable material: "v2 trained on N photos donated by the community".
+- **Demonstrable operational discipline.** Implementing consent, ARCO rights, EXIF stripping, a withdrawal endpoint, and a complete retraining loop is "production-grade" work that a senior technical reviewer recognizes — stronger than adding more slides to the deck.
 
-### Negativas
+### Negatives
 
-- **Nueva superficie legal (LFPDPPP).** Detalle en [ADR 0020](0020-lfpdppp-compliance-architecture.md). Si el aviso de privacidad es insuficiente o el flujo ARCO falla, el riesgo es real (reclamo ante INAI, autoridad mexicana).
-- **Backup operacional manual.** El volumen Coolify sobrevive container restart pero el operador debe descargar `db.sqlite` + `images/` mensualmente al filesystem propio. Backup automatizado queda fuera de scope M7 (potencial M7.5).
-- **Disco del droplet limitado.** ~5 GB esperados para 10k contribs (resize + JPEG q=85 = ~500 KB/img). Monitor manual mensual con `df -h`.
-- **Una vía de fallo más:** SQLite WAL puede corromperse si Coolify mata el container durante un write. Mitigación: `PRAGMA synchronous=NORMAL` + WAL mode; pérdida máxima estimada en milisegundos.
+- **A new legal surface (LFPDPPP).** Detail in [ADR 0020](0020-lfpdppp-compliance-architecture.md). If the privacy notice is insufficient or the ARCO flow fails, the risk is real (a complaint to INAI, the Mexican authority).
+- **Manual operational backup.** The Coolify volume survives a container restart, but the operator must download `db.sqlite` + `images/` monthly to their own filesystem. Automated backup is out of scope for M7 (a potential M7.5).
+- **Limited droplet disk.** ~5 GB expected for 10k contributions (resize + JPEG q=85 = ~500 KB/img). Manual monthly monitoring with `df -h`.
+- **One more failure path:** SQLite WAL can become corrupted if Coolify kills the container during a write. Mitigation: `PRAGMA synchronous=NORMAL` + WAL mode; maximum estimated loss is on the order of milliseconds.
 
-### Neutrales
+### Neutral
 
-- **El scope original se actualiza con redirect a este ADR** — bullet "Persistencia (DB)" en `architecture.md` queda tachado con nota inline. El operador cold lee el matiz desde la primera pasada.
-- **El resto de items "out of scope" sigue vigente** — auth, i18n, mobile-first, PWA, webhooks. M7 levanta exactamente un bullet, no abre paréntesis a otros.
-- **Pipeline CV (`backend/app/pipeline/`) no se toca.** La feature M7 vive en módulo nuevo adyacente `backend/app/contributions/`. Separación clara para que el revisor entienda qué es modelado y qué es data collection.
+- **The original scope is updated with a redirect to this ADR** — the "Persistence (DB)" bullet in `architecture.md` is struck through with an inline note. A cold operator reads the nuance on the first pass.
+- **The rest of the "out of scope" items remain in force** — auth, i18n, mobile-first, PWA, webhooks. M7 lifts exactly one bullet; it does not open a parenthesis for the others.
+- **The CV pipeline (`backend/app/pipeline/`) is not touched.** The M7 feature lives in a new adjacent module, `backend/app/contributions/`. A clear separation so the reviewer understands what is modeling and what is data collection.
 
-## Alternativas consideradas
+## Alternatives considered
 
-1. **Postgres + S3-compatible (DigitalOcean Spaces $5/mes).** Rechazado — overkill para portfolio scale. SQLite WAL + volumen Docker suficiente para los primeros 10k contribs estimados. Reconsiderar si el volumen supera 50 GB o si se necesita acceso concurrente desde múltiples writers (no aplica para single-operator).
-2. **Postergar la feature a M7.5 después de UI polish.** Rechazado — contradice la dirección portfolio (memoria `project-portfolio-direction`); el polish + paper se integran mejor con la feature ya activa que separando los milestones.
-3. **Persistir TODAS las inferencias (incluso sin consent) anonimizadas.** Rechazado — LFPDPPP exige consentimiento expreso para el tratamiento; "anonimización" sin consent del titular no aplica como base legal sólida en el régimen mexicano cuando el dato puede ser potencialmente identificable (imágenes con placas/rostros).
-4. **Levantar la restricción "no persistencia" sin restringir el caso de uso.** Rechazado por principio de minimización — la decisión M7 es específica (continued training, opt-in expreso), no genérica.
+1. **Postgres + an S3-compatible store (DigitalOcean Spaces, $5/month).** Rejected — overkill for portfolio scale. SQLite WAL + a Docker volume is sufficient for the first 10k contributions estimated. Reconsider if the volume exceeds 50 GB or if concurrent access from multiple writers is needed (does not apply to a single operator).
+2. **Defer the feature to M7.5 after the UI polish.** Rejected — it contradicts the portfolio direction (the `project-portfolio-direction` memory); the polish + paper integrate better with the feature already active than by splitting the milestones apart.
+3. **Persist ALL inferences (even without consent), anonymized.** Rejected — LFPDPPP requires express consent for the processing; "anonymization" without the data subject's consent does not hold up as a solid legal basis under the Mexican regime when the data may be potentially identifiable (images with license plates / faces).
+4. **Lift the "no persistence" restriction without restricting the use case.** Rejected on the principle of minimization — the M7 decision is specific (continued training, explicit opt-in), not generic.
 
-## Referencias
+## References
 
-- `architecture doc` sec 11 — restricción original (modificada en M7).
-- design doc — spec M7 D1-D3, D9.
-- [ADR 0020](0020-lfpdppp-compliance-architecture.md) — cumplimiento legal asociado.
-- [ADR 0021](0021-storage-sqlite-volume.md) — detalle técnico de SQLite + volumen.
-- [ADR 0022](0022-email-resend-transactional.md) — manejo de email separado.
-- [ADR 0023](0023-retraining-loop-semi-auto.md) — pipeline de re-entrenamiento.
+- `architecture doc` sec 11 — the original restriction (modified in M7).
+- design doc — M7 spec D1-D3, D9.
+- [ADR 0020](0020-lfpdppp-compliance-architecture.md) — the associated legal compliance.
+- [ADR 0021](0021-storage-sqlite-volume.md) — the technical detail of SQLite + volume.
+- [ADR 0022](0022-email-resend-transactional.md) — email handling, kept separate.
+- [ADR 0023](0023-retraining-loop-semi-auto.md) — the retraining pipeline.
 - LFPDPPP: <https://www.diputados.gob.mx/LeyesBiblio/pdf/LFPDPPP.pdf>

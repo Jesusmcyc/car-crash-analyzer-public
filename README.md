@@ -83,8 +83,6 @@ Full layered architecture in [`architecture.md`](architecture.md).
 | Fine-tune | [0017 CarDD fine-tune verdict](decisions/0017-finetune-cardd-result.md) |
 | Image collection (M7) | [0019 flip persistence](decisions/0019-flip-no-persistence.md) · [0020 LFPDPPP compliance](decisions/0020-lfpdppp-compliance-architecture.md) · [0021 SQLite storage](decisions/0021-storage-sqlite-volume.md) · [0022 transactional email](decisions/0022-email-resend-transactional.md) · [0023 retraining loop](decisions/0023-retraining-loop-semi-auto.md) · [0024 consent default-on](decisions/0024-consent-default-on-with-opt-out.md) |
 
-> ADRs are written in Spanish — the project context is a Mexican insurtech and the design conversation happened in that language. Engineering content is the same in any language; this is left explicit rather than translated.
-
 ## Project history
 
 See [`progress.md`](progress.md) for a milestone-by-milestone narrative (M0 scaffold → M8 redesign).

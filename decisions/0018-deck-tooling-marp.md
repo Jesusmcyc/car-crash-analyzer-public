@@ -1,45 +1,45 @@
 # ADR 0018 — Deck tooling: Marp
 
-**Estado:** aceptado
-**Fecha:** 2026-05-06
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-06
+**Author:** Jesús Moreno
 **Milestone:** M6
 
-## Contexto
+## Context
 
-El cierre del proyecto requiere un slide deck para una entrevista técnica en Momento Seguros (pantalla compartida, ≤10 min). Tres opciones reales: Marp (markdown → PDF), Slidev (Vue/Vite con dev server), Google Slides (cloud, binario opaco).
+Closing out the project requires a slide deck for a technical interview at Momento Seguros (screen-shared, ≤10 min). Three real options: Marp (markdown → PDF), Slidev (Vue/Vite with a dev server), Google Slides (cloud, opaque binary).
 
-## Decisión
+## Decision
 
-**Marp.** Source en `docs/deck/slides.md`, export a `docs/deck/slides.pdf` con `npx @marp-team/marp-cli@latest --allow-local-files --pdf docs/deck/slides.md -o docs/deck/slides.pdf`. PDF estático commiteado para no depender de toolchain durante la entrevista.
+**Marp.** Source in `docs/deck/slides.md`, exported to `docs/deck/slides.pdf` with `npx @marp-team/marp-cli@latest --allow-local-files --pdf docs/deck/slides.md -o docs/deck/slides.pdf`. The static PDF is committed so as not to depend on a toolchain during the interview.
 
-## Consecuencias
+## Consequences
 
-### Positivas
+### Positives
 
-- Deck commiteado en markdown — diff por línea, blame por commit, review en PR, alineado con el resto del proyecto (ADRs, specs, métricas son markdown).
-- PDF estático no rompe screen share de Meet/Zoom (factor decisivo para entrevista en pantalla compartida).
-- Cero dependencia de runtime durante la presentación; el visor del sistema basta.
-- `--allow-local-files` permite embeber `assets/demo.gif` y `assets/diagrams/*.png` sin servir un dev server.
+- The deck is committed as markdown — line-level diffs, per-commit blame, review in PRs, aligned with the rest of the project (ADRs, specs, and metrics are all markdown).
+- A static PDF does not break Meet/Zoom screen sharing (the decisive factor for a screen-shared interview).
+- Zero runtime dependency during the presentation; the system viewer is enough.
+- `--allow-local-files` makes it possible to embed `assets/demo.gif` and `assets/diagrams/*.png` without serving a dev server.
 
-### Negativas
+### Negatives
 
-- Presenter mode más limitado que Slidev (no rich transitions, no live editor durante la sesión). Mitigación: las notas viven en la cabeza del speaker tras los dry-runs (D6).
-- Requiere node 20 + npm para el export. Mitigación: ya está cubierto por el frontend del proyecto; alternativa adicional con `docker run marpteam/marp-cli`.
+- Presenter mode is more limited than Slidev (no rich transitions, no live editor during the session). Mitigation: the notes live in the speaker's head after the dry runs (D6).
+- Requires node 20 + npm for the export. Mitigation: this is already covered by the project's frontend; an additional alternative is `docker run marpteam/marp-cli`.
 
-### Neutrales
+### Neutral
 
-- Marp soporta `<!-- _class: lead -->` para slides de portada/cierre y `---` como delimitador entre slides; sintaxis estándar markdown sin extensiones obligatorias.
+- Marp supports `<!-- _class: lead -->` for cover/closing slides and `---` as the delimiter between slides; standard markdown syntax with no mandatory extensions.
 
-## Alternativas consideradas
+## Alternatives considered
 
-1. **Slidev** — mejor presenter mode y animaciones, pero requiere dev server vivo durante la presentación. Rechazado por superficie de fallo en pantalla compartida.
-2. **Google Slides** — binario opaco con revision history sin diff técnico auditable. Requiere red + login en el momento crítico. Rechazado.
-3. **PowerPoint / Keynote** — formatos propietarios; requieren la app instalada; fuentes pueden no embarcar. Rechazado por portabilidad.
-4. **Reveal.js manual** — más control pero más fricción para mantener; Marp ya wrappear sintaxis Reveal-style sin requerir HTML manual.
-5. **LaTeX + Beamer** — overkill para 10 slides de portfolio. El sweet spot es markdown.
+1. **Slidev** — better presenter mode and animations, but requires a live dev server during the presentation. Rejected because of the failure surface in screen sharing.
+2. **Google Slides** — an opaque binary with a revision history but no auditable technical diff. Requires network + login at the critical moment. Rejected.
+3. **PowerPoint / Keynote** — proprietary formats; require the app to be installed; fonts may not embed. Rejected for portability.
+4. **Manual Reveal.js** — more control but more friction to maintain; Marp already wraps Reveal-style syntax without requiring manual HTML.
+5. **LaTeX + Beamer** — overkill for 10 portfolio slides. The sweet spot is markdown.
 
-## Referencias
+## References
 
 - Spec M6 D1: design doc
 - Marp CLI: <https://github.com/marp-team/marp-cli>.

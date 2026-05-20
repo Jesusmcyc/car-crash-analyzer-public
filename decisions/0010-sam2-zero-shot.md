@@ -1,72 +1,72 @@
-# ADR 0010 — SAM 2 zero-shot, hiera-tiny variante
+# ADR 0010 — SAM 2 zero-shot, hiera-tiny variant
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-03
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-03
+**Author:** Jesús Moreno
 **Milestone:** M3
-**Spec asociado:** design doc sec D1
+**Related spec:** design doc sec D1
 
-## Contexto
+## Context
 
-M3 cierra el pipeline con segmentación real. El spec maestro (sec M3) definió
-SAM 2 como segmentador y dejó la decisión zero-shot vs fine-tune para este ADR.
+M3 closes the pipeline with real segmentation. The master spec (sec M3) settled on
+SAM 2 as the segmenter and deferred the zero-shot vs fine-tune decision to this ADR.
 
-CarDD provee ~4k imágenes con anotaciones de daños en formato COCO. SAM 2 fue
-entrenado con ~11M máscaras (SA-V dataset). Tres opciones reales:
+CarDD provides ~4k images with damage annotations in COCO format. SAM 2 was
+trained on ~11M masks (the SA-V dataset). Three real options:
 
-1. **Zero-shot, hiera-tiny** (~40 MB, ~1–2 s/máscara CPU).
-2. **Zero-shot, hiera-base+** (~160 MB, ~3–4 s/máscara CPU).
-3. **Fine-tune con CarDD.**
+1. **Zero-shot, hiera-tiny** (~40 MB, ~1–2 s/mask on CPU).
+2. **Zero-shot, hiera-base+** (~160 MB, ~3–4 s/mask on CPU).
+3. **Fine-tune with CarDD.**
 
-## Decisión
+## Decision
 
-**Zero-shot con `facebook/sam2-hiera-tiny`** como default. Path de upgrade a
-`facebook/sam2-hiera-base-plus` por env var `SEGMENTER_MODEL` documentado.
+**Zero-shot with `facebook/sam2-hiera-tiny`** as the default. A documented upgrade
+path to `facebook/sam2-hiera-base-plus` via the `SEGMENTER_MODEL` env var.
 
-## Consecuencias
+## Consequences
 
-### Positivas
+### Positives
 
-- Latencia compatible con presupuesto M3 (~9–12 s pipeline completo CPU sobre
-  3 daños típicos). Hiera-base+ tocaría 18–22 s y rebasaría `proxy_read_timeout`.
-- Sin pipeline de entrenamiento adicional. M5 entrena el detector; el segmenter
-  no entra en ese ciclo.
-- Calidad zero-shot suficiente para el demo. Las diferencias mIoU tiny vs
-  base+ rondan 2–3 puntos sobre SA-V; con simplificación Douglas–Peucker
-  aplicada en M3 (ADR 0012), la diferencia visible se diluye.
+- Latency compatible with the M3 budget (~9–12 s for the full pipeline on CPU over
+  3 typical damages). Hiera-base+ would reach 18–22 s and exceed `proxy_read_timeout`.
+- No additional training pipeline. M5 trains the detector; the segmenter
+  is not part of that cycle.
+- Zero-shot quality sufficient for the demo. The mIoU differences between tiny and
+  base+ are around 2–3 points on SA-V; with the Douglas–Peucker simplification
+  applied in M3 (ADR 0012), the visible difference dilutes.
 
-### Negativas
+### Negatives
 
-- Calidad de máscara potencialmente inferior a un modelo fine-tuned con CarDD.
-  Mitigación: el demo prioriza pipeline shape-completo sobre pixel-perfect;
-  M5 puede revisitar si una insurtech real requiere mayor fidelidad.
-- Costos de inferencia escalan lineal con N daños. Mitigación: el detector ya
-  filtra a vehículos COCO; N típico ≤5.
+- Mask quality potentially inferior to a model fine-tuned with CarDD.
+  Mitigation: the demo prioritizes a shape-complete pipeline over pixel-perfect masks;
+  M5 can revisit this if a real insurtech requires higher fidelity.
+- Inference costs scale linearly with the N damages. Mitigation: the detector already
+  filters to COCO vehicles; a typical N is ≤5.
 
-## Alternativas consideradas
+## Alternatives considered
 
-### Fine-tune SAM 2 con CarDD
+### Fine-tune SAM 2 with CarDD
 
-Rechazado. CarDD tiene tres órdenes de magnitud menos máscaras que SA-V;
-fine-tune sin disciplina de regularización degrada significativamente
-la generalización. El comportamiento está documentado en literatura de SAM 1
+Rejected. CarDD has three orders of magnitude fewer masks than SA-V;
+fine-tuning without regularization discipline significantly degrades
+generalization. The behavior is documented in the SAM 1 literature
 (catastrophic forgetting).
 
 ### SAM 1 (`facebook/sam-vit-base`)
 
-Rechazado. SAM 2 es estrictamente superior en SA-V eval; la API en
-`transformers` es equivalente. Sin razón técnica para volver atrás.
+Rejected. SAM 2 is strictly superior on SA-V eval; the `transformers`
+API is equivalent. No technical reason to go back.
 
-### Hiera-base+ default
+### Hiera-base+ as the default
 
-Rechazado por presupuesto de latencia (ver sec Consecuencias). Disponible
-como opt-in vía `SEGMENTER_MODEL=facebook/sam2-hiera-base-plus` para casos
-donde el operador acepte 2× latencia.
+Rejected on the latency budget (see the Consequences section). Available
+as an opt-in via `SEGMENTER_MODEL=facebook/sam2-hiera-base-plus` for cases
+where the operator accepts 2× latency.
 
-## Referencias
+## References
 
-- SAM 2 oficial: <https://github.com/facebookresearch/sam2>
+- Official SAM 2: <https://github.com/facebookresearch/sam2>
 - Transformers Sam2Model: <https://huggingface.co/docs/transformers/main/en/model_doc/sam2>
 - ADR 0001 — pretrained-first.
-- ADR 0011 — severity-heuristic (dependencia downstream).
+- ADR 0011 — severity-heuristic (downstream dependency).
 - ADR 0012 — mask-encoding-polygon-cap.

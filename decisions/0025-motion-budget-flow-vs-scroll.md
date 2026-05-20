@@ -1,49 +1,49 @@
-# ADR 0025 — Motion budget: ampliar a 7 con categorías flujo vs scroll
+# ADR 0025 — Motion budget: expand to 7 with flow vs scroll categories
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-18
-**Autor:** Jesús Moreno
-**Milestone:** M8 (rediseño del frontend)
+**Status:** Accepted
+**Date:** 2026-05-18
+**Author:** Jesús Moreno
+**Milestone:** M8 (frontend redesign)
 **Supersedes:** ADR 0015
 
-## Contexto
+## Context
 
-ADR 0015 fijó el motion budget en exactamente 3 animaciones Framer Motion, justificado para single-page sin scroll narrativo. El rediseño M8 agrega cinco secciones nuevas (CoverHero, PipelineSection, BenchmarksSection, AdrsSection, StackSection) cuyo lenguaje visual requiere stagger viewport-triggered para sentirse vivas sin animación gratuita. El budget rígido de 3 no cubre este caso.
+ADR 0015 fixed the motion budget at exactly 3 Framer Motion animations, justified for a single page without narrative scroll. The M8 redesign adds five new sections (CoverHero, PipelineSection, BenchmarksSection, AdrsSection, StackSection) whose visual language requires viewport-triggered stagger to feel alive without gratuitous animation. The rigid budget of 3 does not cover this case.
 
-## Decisión
+## Decision
 
-Reemplazar el contador único por dos categorías con conteo separado:
+Replace the single counter with two categories with separate counts:
 
-- **Flujo (máx 4)** — transiciones del state machine de la app (`idle → uploading → success → error`) o mount inicial del hero. Disparadas por estado, no por scroll. Las 3 originales de ADR 0015 + el mount del CoverHero = 4.
+- **Flow (max 4)** — transitions of the app's state machine (`idle → uploading → success → error`) or the initial mount of the hero. Triggered by state, not by scroll. The 3 originals from ADR 0015 + the CoverHero mount = 4.
 
-- **Scroll/sección (máx 3)** — entrada de secciones largas, viewport-triggered con `once: true` y `viewport.margin: "-120px"`. Hoy: Pipeline stagger, Benchmarks stagger, ADRs fade. Una sola activación por sección al primer scroll.
+- **Scroll/section (max 3)** — entrance of long sections, viewport-triggered with `once: true` and `viewport.margin: "-120px"`. Currently: Pipeline stagger, Benchmarks stagger, ADRs fade. A single activation per section on the first scroll.
 
-**Total: 7 animaciones Framer Motion.** Cualquier animación nueva debe encajar en una categoría o requiere ADR.
+**Total: 7 Framer Motion animations.** Any new animation must fit into a category or requires an ADR.
 
-Lo que NO cuenta hacia el budget:
+What does NOT count toward the budget:
 - CSS transitions (hover, focus, color shifts)
-- Animaciones decorativas CSS-only (`AppBackground` blobs)
+- CSS-only decorative animations (`AppBackground` blobs)
 - Skeleton shimmer (Tailwind `animate-pulse`)
-- Navbar transición de fondo al scrollear (CSS transition)
+- Navbar background transition on scroll (CSS transition)
 
-## Consecuencias
+## Consequences
 
-### Positivas
-- Permite stagger educado en secciones nuevas sin romper disciplina
-- Las dos categorías obligan a clasificar antes de animar
-- Mantiene la regla: cero animación gratuita
+### Positives
+- Allows tasteful stagger in new sections without breaking discipline
+- The two categories force a classification before animating
+- Keeps the rule: zero gratuitous animation
 
-### Negativas
-- Más complejidad para auditar (antes era trivial: contar `motion.*` en el repo)
-- Decisión de categoría puede ser ambigua en casos edge
+### Negatives
+- More complexity to audit (it used to be trivial: count `motion.*` in the repo)
+- The category decision can be ambiguous in edge cases
 
-## Alternativas consideradas
+## Alternatives considered
 
-- Regla cualitativa "solo animaciones de estado": más simple pero menos auditable. Descartada — el conteo es la disciplina.
-- Mantener 3 y usar `animation-timeline: view()` CSS para scroll: soporte de browser inconsistente (Safari < 17.4). Descartada.
-- Ignorar ADR 0015 sin reemplazo: incoherente con la práctica de ADRs del proyecto.
+- A qualitative rule "state animations only": simpler but less auditable. Discarded — the count is the discipline.
+- Keep 3 and use CSS `animation-timeline: view()` for scroll: inconsistent browser support (Safari < 17.4). Discarded.
+- Ignore ADR 0015 without a replacement: incoherent with the project's ADR practice.
 
-## Referencias
+## References
 
-- ADR 0015 (motion budget original de 3) — superseded
-- Spec del rediseño: design doc
+- ADR 0015 (the original motion budget of 3) — superseded
+- Redesign spec: design doc

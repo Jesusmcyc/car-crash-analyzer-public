@@ -1,50 +1,50 @@
-# ADR 0009 — Cold-start CPU: preload síncrono en lifespan + cache en volumen
+# ADR 0009 — CPU cold start: synchronous preload in lifespan + volume cache
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-03
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-03
+**Author:** Jesús Moreno
 
-## Contexto
+## Context
 
-M2 añade pesos reales al backend (~70 MB RT-DETR-l o ~22 MB YOLOv8s). Dos preguntas operativas:
+M2 adds real weights to the backend (~70 MB for RT-DETR-l or ~22 MB for YOLOv8s). Two operational questions:
 
-1. **¿Cuándo se cargan los pesos?** Opciones: sync en startup vs lazy en primera request vs background con gate en `/health`.
-2. **¿Dónde viven entre reinicios del container?** Sin persistencia, cada redeploy descarga desde el CDN de Ultralytics.
+1. **When are the weights loaded?** Options: synchronously at startup vs lazily on the first request vs in the background with a gate on `/health`.
+2. **Where do they live between container restarts?** Without persistence, every redeploy downloads from the Ultralytics CDN.
 
-## Decisión
+## Decision
 
-**Preload síncrono en `lifespan` startup de FastAPI.** Pesos cargados antes de aceptar tráfico; `/health` con `models_loaded: True` significa "puedo servir `/analyze` ahora".
+**Synchronous preload in the FastAPI `lifespan` startup.** Weights are loaded before accepting traffic; `/health` with `models_loaded: True` means "I can serve `/analyze` now".
 
-**Cache en volumen Docker** (`models-cache:/app/.cache/models` en `docker-compose.prod.yml`, ya provisto desde M1). `os.environ["YOLO_CONFIG_DIR"] = settings.model_cache_dir` se setea al inicio del lifespan para que Ultralytics escriba ahí.
+**Cache in a Docker volume** (`models-cache:/app/.cache/models` in `docker-compose.prod.yml`, already provisioned since M1). `os.environ["YOLO_CONFIG_DIR"] = settings.model_cache_dir` is set at the start of the lifespan so Ultralytics writes there.
 
-**Healthcheck Coolify `start_period: 120s`** durante el primer boot del VPS (cubre la descarga inicial). Tras validar empíricamente que la cache caliente reduce cold-start a <30s, se revierte a 90s con commit aparte que cita el dato medido.
+**Coolify healthcheck `start_period: 120s`** during the VPS's first boot (covers the initial download). Once it is empirically confirmed that a warm cache reduces the cold start to <30s, it is reverted to 90s in a separate commit that cites the measured figure.
 
-**Si el preload lanza** (peso corrupto, red caída, OOM): `app.state.models_loaded = False`, `/health` reporta `status: "degraded"`, `/analyze` devuelve `503 INFERENCE_UNAVAILABLE` con `request_id`. El container queda vivo para que Coolify pueda inspeccionarlo.
+**If the preload throws** (corrupt weights, network down, OOM): `app.state.models_loaded = False`, `/health` reports `status: "degraded"`, and `/analyze` returns `503 INFERENCE_UNAVAILABLE` with a `request_id`. The container stays alive so Coolify can inspect it.
 
-## Consecuencias
+## Consequences
 
-### Positivas
+### Positives
 
-- **Contrato de `/health` simple y único.** No hay estados intermedios `"starting"`. Coolify decide unhealthy/healthy con un solo bool.
-- **Primera request rápida.** El usuario que prueba el demo no paga el cold-start; lo paga el container al bootear.
-- **Reinicios baratos.** Tras el primer boot del VPS, el volumen mantiene los pesos. Boots subsiguientes < 30s.
-- **Degraded mode auditable.** Si el lifespan falla, el container responde y se puede ver `curl /health | jq` qué pasó. Coolify marca unhealthy y notifica.
+- **A simple, single `/health` contract.** There are no intermediate `"starting"` states. Coolify decides unhealthy/healthy with a single bool.
+- **A fast first request.** The user trying the demo does not pay the cold start; the container pays it at boot.
+- **Cheap restarts.** After the VPS's first boot, the volume keeps the weights. Subsequent boots are < 30s.
+- **An auditable degraded mode.** If the lifespan fails, the container still responds, and `curl /health | jq` shows what happened. Coolify marks it unhealthy and notifies.
 
-### Negativas
+### Negatives
 
-- **Container tarda 60–90s en aparecer healthy en primer boot del VPS.** Comparado con un container "starting fast", esto se siente lento. Mitigado por `start_period: 120s` durante esa ventana — Coolify ignora los healthcheck failures hasta que vence.
-- **Si los pesos del CDN cambian de checksum sin invalidar cache, podemos servir versión desactualizada.** Riesgo bajo: Ultralytics versiona pesos por nombre de archivo (`rtdetr-l.pt` no cambia entre versiones).
-- **Bump temporal de `start_period` requiere disciplina para revertir.** Documentado en commit del bump y en este ADR como follow-up.
+- **The container takes 60–90s to appear healthy on the VPS's first boot.** Compared to a container that "starts fast", this feels slow. Mitigated by `start_period: 120s` during that window — Coolify ignores healthcheck failures until it expires.
+- **If the CDN weights change checksum without invalidating the cache, we may serve a stale version.** Low risk: Ultralytics versions weights by file name (`rtdetr-l.pt` does not change between versions).
+- **A temporary `start_period` bump requires discipline to revert.** Documented in the bump commit and in this ADR as a follow-up.
 
-## Alternativas consideradas
+## Alternatives considered
 
-1. **Lazy loading en primera request.** Primera request paga 30–60s. UX pobre para un demo presentable. Rechazada.
-2. **Background loading con gate en `/health`.** Container responde rápido, `/health` reporta `"starting"` hasta que termina. Añade complejidad: lock para evitar doble carga, gate en `/analyze`, semántica de tres estados en `/health`. Sin ganancia operativa proporcional para un demo CPU. Rechazada.
-3. **Pesos baked en la imagen Docker.** Imagen final crece ~70MB; cada cambio de pesos requiere rebuild + redeploy. Pierde el principio "swap por env var" del ADR 0001. Rechazada.
+1. **Lazy loading on the first request.** The first request pays 30–60s. Poor UX for a presentable demo. Rejected.
+2. **Background loading with a gate on `/health`.** The container responds fast, and `/health` reports `"starting"` until it finishes. This adds complexity: a lock to avoid double loading, a gate on `/analyze`, and three-state semantics on `/health`. No proportional operational gain for a CPU demo. Rejected.
+3. **Weights baked into the Docker image.** The final image grows ~70MB; every weight change requires a rebuild + redeploy. This loses the "swap via env var" principle from ADR 0001. Rejected.
 
-## Referencias
+## References
 
-- Spec maestro: design doc sec M2 (riesgos cold-start).
-- Design decisions M2: design doc sec 2 D1 + D7.
+- Master spec: design doc sec M2 (cold-start risks).
+- M2 design decisions: design doc sec 2 D1 + D7.
 - ADR 0007 — same-origin nginx proxy (`proxy_read_timeout`): [`0007-prod-connectivity-nginx-proxy.md`](0007-prod-connectivity-nginx-proxy.md).
-- Implementación: `backend/app/main.py` (`lifespan`), `docker-compose.prod.yml` (`start_period`).
+- Implementation: `backend/app/main.py` (`lifespan`), `docker-compose.prod.yml` (`start_period`).

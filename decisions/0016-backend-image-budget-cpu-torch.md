@@ -1,87 +1,87 @@
-# ADR 0016 — Backend image budget: torch CPU-only + cache redirection en Dockerfile
+# ADR 0016 — Backend image budget: CPU-only torch + cache redirection in the Dockerfile
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-04
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-04
+**Author:** Jesús Moreno
 
-## Contexto
+## Context
 
-Después de cerrar M3 con todos los tests verdes localmente y push a `master`, una verificación oportunista de prod (`https://cca.imb-central.tech`) durante M4 reveló que **prod estaba sirviendo el walking skeleton de M1**, no el pipeline real de M3. La respuesta de `/api/health` no incluía el campo `detector_backend` que M2 introdujo, y `/api/analyze` devolvía polígonos sintéticos con `backend:"mock"` en 500 ms — síntomas inequívocos de M1 corriendo, no M3.
+After closing M3 with every test green locally and pushing to `master`, an opportunistic prod check (`https://cca.imb-central.tech`) during M4 revealed that **prod was serving the M1 walking skeleton**, not the real M3 pipeline. The `/api/health` response did not include the `detector_backend` field that M2 introduced, and `/api/analyze` was returning synthetic polygons with `backend:"mock"` in 500 ms — unmistakable symptoms of M1 running, not M3.
 
-Investigando el deployment log de Coolify para el último push (`4859c4d`, cierre M3), el build completaba `pip install` pero moría con exit code 255 durante el step `#37 [backend] exporting to image / exporting layers`. Coolify hacía rollback a la última imagen sana — la de M1, anterior a la introducción de `ultralytics` y `transformers`. Ese mismo modo de falla había estado ocurriendo silenciosamente en cada push desde M2; ningún deploy de M2 ni de M3 había aterrizado realmente en prod.
+Investigating the Coolify deployment log for the latest push (`4859c4d`, M3 close), the build completed `pip install` but died with exit code 255 during the `#37 [backend] exporting to image / exporting layers` step. Coolify rolled back to the last healthy image — the M1 one, predating the introduction of `ultralytics` and `transformers`. That same failure mode had been occurring silently on every push since M2; no M2 or M3 deploy had actually landed in prod.
 
-Cuatro problemas concatenados se descubrieron al reproducir el build localmente con `docker compose -f docker-compose.prod.yml build backend`:
+Four chained problems were discovered when reproducing the build locally with `docker compose -f docker-compose.prod.yml build backend`:
 
-1. **Build OOM/disk-full en `exporting layers`.** `uv.lock` resolvía `torch==2.11.0` y `torchvision==0.26.0` desde el index PyPI, lo cual arrastraba como dependencias transitivas la stack completa de NVIDIA/CUDA: `nvidia-cublas` (423 MB), `nvidia-cudnn-cu13` (366 MB), `nvidia-cufft` (214 MB), `nvidia-cusolver` (200 MB), `nvidia-nccl-cu13` (196 MB), `triton` (188 MB), `nvidia-cusparselt-cu13` (169 MB), `nvidia-cusparse` (145 MB), `nvidia-cuda-nvrtc` (90 MB), y siete paquetes `nvidia-*` adicionales. La imagen final descomprimida pesaba ~5–6 GB. El builder de Coolify reventaba al exportar las layers comprimidas. El demo es CPU-only por diseño (ADR 0009), así que la stack CUDA es 100% peso muerto.
+1. **Build OOM/disk-full on `exporting layers`.** `uv.lock` resolved `torch==2.11.0` and `torchvision==0.26.0` from the PyPI index, which pulled in the full NVIDIA/CUDA stack as transitive dependencies: `nvidia-cublas` (423 MB), `nvidia-cudnn-cu13` (366 MB), `nvidia-cufft` (214 MB), `nvidia-cusolver` (200 MB), `nvidia-nccl-cu13` (196 MB), `triton` (188 MB), `nvidia-cusparselt-cu13` (169 MB), `nvidia-cusparse` (145 MB), `nvidia-cuda-nvrtc` (90 MB), and seven additional `nvidia-*` packages. The final uncompressed image weighed ~5–6 GB. The Coolify builder blew up while exporting the compressed layers. The demo is CPU-only by design (ADR 0009), so the CUDA stack is 100% dead weight.
 
-2. **`cv2 ImportError: libxcb.so.1`.** `ultralytics` declara `opencv-python` (full GUI build) como dependencia transitiva. `pip install` lo instalaba *encima* de `opencv-python-headless` que ya estaba en `pyproject.toml`. Ambos paquetes shippean el mismo directorio `cv2/` en site-packages; pip da ownership al último instalado. La imagen `python:3.11-slim` no trae `libxcb1`/`libGL1`, y `import cv2` reventaba en runtime con `ImportError: libxcb.so.1: cannot open shared object file`.
+2. **`cv2 ImportError: libxcb.so.1`.** `ultralytics` declares `opencv-python` (the full GUI build) as a transitive dependency. `pip install` installed it *on top of* the `opencv-python-headless` that was already in `pyproject.toml`. Both packages ship the same `cv2/` directory in site-packages; pip gives ownership to whichever is installed last. The `python:3.11-slim` image does not include `libxcb1`/`libGL1`, and `import cv2` blew up at runtime with `ImportError: libxcb.so.1: cannot open shared object file`.
 
-3. **`PermissionError` descargando `rtdetr-l.pt`.** El Dockerfile creaba el WORKDIR `/app` como `root` y luego switcheaba a `USER app` (creado con `--no-create-home`). Ultralytics descarga pesos al CWD antes de moverlos al cache, y el user `app` no podía escribir en `/app` (ni en `/app/.cache/models`, que se monta como volumen y hereda los permisos del mount point).
+3. **`PermissionError` downloading `rtdetr-l.pt`.** The Dockerfile created the WORKDIR `/app` as `root` and then switched to `USER app` (created with `--no-create-home`). Ultralytics downloads weights to the CWD before moving them to the cache, and the `app` user could not write to `/app` (nor to `/app/.cache/models`, which is mounted as a volume and inherits the permissions of the mount point).
 
-4. **`PermissionError at /home/app` descargando `facebook/sam2-hiera-tiny`.** HuggingFace Hub cachea por default en `~/.cache/huggingface`, expandido a `/home/app/.cache/huggingface`. El user `app` no tiene `$HOME` válido (creado con `--no-create-home`), así que `os.makedirs('/home/app/.cache/...', exist_ok=True)` reventaba con `Permission denied`.
+4. **`PermissionError at /home/app` downloading `facebook/sam2-hiera-tiny`.** HuggingFace Hub caches by default in `~/.cache/huggingface`, which expands to `/home/app/.cache/huggingface`. The `app` user has no valid `$HOME` (created with `--no-create-home`), so `os.makedirs('/home/app/.cache/...', exist_ok=True)` blew up with `Permission denied`.
 
-Cada uno de estos cuatro fallos se descubrió secuencialmente reproduciendo el smoke local; ninguno habría sido evidente sin ese paso, porque los tests `pytest -m slow` corren en el host de desarrollo (Windows) que tiene `$HOME` válido, no usa el Dockerfile, y resuelve `cv2` desde el opencv-python-headless del venv local sin conflicto.
+Each of these four failures was discovered sequentially while reproducing the local smoke test; none would have been evident without that step, because the `pytest -m slow` tests run on the development host (Windows), which has a valid `$HOME`, does not use the Dockerfile, and resolves `cv2` from the local venv's opencv-python-headless without any conflict.
 
-## Decisión
+## Decision
 
-**Restringir `torch` y `torchvision` al index `https://download.pytorch.org/whl/cpu`** vía `[[tool.uv.index]]` + `[tool.uv.sources]` en `pyproject.toml`. Las wheels `+cpu` no traen ninguna dependencia `nvidia-*` ni `triton`. La imagen baja de ~5–6 GB a ~2.5 GB. El Dockerfile pasa `--extra-index-url https://download.pytorch.org/whl/cpu` a `pip install` para que pip pueda resolver las wheels `+cpu` (uv graba `torch==2.11.0+cpu` en `requirements.txt` exportado, pero pip por sí solo solo conoce PyPI).
+**Restrict `torch` and `torchvision` to the `https://download.pytorch.org/whl/cpu` index** via `[[tool.uv.index]]` + `[tool.uv.sources]` in `pyproject.toml`. The `+cpu` wheels carry no `nvidia-*` or `triton` dependency. The image drops from ~5–6 GB to ~2.5 GB. The Dockerfile passes `--extra-index-url https://download.pytorch.org/whl/cpu` to `pip install` so that pip can resolve the `+cpu` wheels (uv records `torch==2.11.0+cpu` in the exported `requirements.txt`, but pip on its own only knows about PyPI).
 
-**Remover `opencv-python` post-install y reinstalar `opencv-python-headless --force-reinstall --no-deps`** en el mismo `RUN` del Dockerfile. `pip uninstall opencv-python` borra el directorio `cv2/` aunque `opencv-python-headless` también declare ownership; el reinstall con `--force-reinstall --no-deps` restaura el `cv2/` desde la wheel headless sin re-resolver dependencias. El step termina con un smoke `python -c "import cv2; print('cv2 ok', cv2.__version__)"` que rompe el build si algo está mal.
+**Remove `opencv-python` post-install and reinstall `opencv-python-headless --force-reinstall --no-deps`** in the same `RUN` step of the Dockerfile. `pip uninstall opencv-python` deletes the `cv2/` directory even though `opencv-python-headless` also claims ownership; the reinstall with `--force-reinstall --no-deps` restores `cv2/` from the headless wheel without re-resolving dependencies. The step ends with a smoke test `python -c "import cv2; print('cv2 ok', cv2.__version__)"` that breaks the build if anything is wrong.
 
-**`chown -R app:app /app`** después del último `COPY`, antes del `USER app`. Combinado con `RUN mkdir -p /app/.cache/models/huggingface`, esto da al user `app` permisos de write tanto en el WORKDIR (necesario para los staging downloads de Ultralytics) como en el cache dir del volumen montado.
+**`chown -R app:app /app`** after the last `COPY`, before the `USER app`. Combined with `RUN mkdir -p /app/.cache/models/huggingface`, this gives the `app` user write permissions both in the WORKDIR (needed for Ultralytics' staging downloads) and in the cache dir of the mounted volume.
 
-**Variables de entorno explícitas para los caches**, set al inicio del `ENV` block:
-- `HOME=/app` — fija un `$HOME` coherente para el user sin home dir.
-- `HF_HOME=/app/.cache/models/huggingface` y `HUGGINGFACE_HUB_CACHE=/app/.cache/models/huggingface` — redirige el cache de HuggingFace al volumen persistente.
-- `XDG_CACHE_HOME=/app/.cache` — futuro-proof para cualquier lib que respete XDG.
+**Explicit environment variables for the caches**, set at the start of the `ENV` block:
+- `HOME=/app` — pins a coherent `$HOME` for the user with no home dir.
+- `HF_HOME=/app/.cache/models/huggingface` and `HUGGINGFACE_HUB_CACHE=/app/.cache/models/huggingface` — redirect the HuggingFace cache to the persistent volume.
+- `XDG_CACHE_HOME=/app/.cache` — future-proofs any library that respects XDG.
 
-Las cuatro correcciones viajan en un solo commit (`chore(backend): fit Coolify build budget with cpu-only torch + opencv/cache fixes`), porque ninguna por sí sola hace que el deploy funcione end-to-end.
+The four fixes travel in a single commit (`chore(backend): fit Coolify build budget with cpu-only torch + opencv/cache fixes`), because none of them on its own makes the deploy work end-to-end.
 
-## Consecuencias
+## Consequences
 
-**Positivas:**
-- Imagen final cae de ~5–6 GB a 2.54 GB. El builder de Coolify exporta layers sin morir.
-- Sin las wheels `nvidia-*`, el cold-start lee menos disco y consume menos RAM (relevante en VPS pequeños).
-- Lock determinista mantiene la trazabilidad: `uv.lock` graba `torch==2.11.0+cpu` explícitamente.
-- HF cache compartido con Ultralytics en el mismo volumen Docker, sobrevive redeploys.
-- El smoke `import cv2` en el build catchea regresiones futuras (si alguien añade una dep que rearrastra opencv-python).
+**Positives:**
+- The final image drops from ~5–6 GB to 2.54 GB. The Coolify builder exports layers without dying.
+- Without the `nvidia-*` wheels, the cold start reads less disk and consumes less RAM (relevant on small VPSes).
+- A deterministic lock preserves traceability: `uv.lock` records `torch==2.11.0+cpu` explicitly.
+- The HF cache is shared with Ultralytics on the same Docker volume and survives redeploys.
+- The `import cv2` smoke test in the build catches future regressions (if someone adds a dependency that pulls opencv-python back in).
 
-**Negativas:**
-- El Dockerfile gana ~10 líneas de complejidad (extra-index-url, uninstall+reinstall opencv, chown, env vars). Documentado inline con comentarios cortos que apuntan a este ADR.
-- Si se necesita GPU en el futuro (M5 fine-tuning local con CUDA, por ejemplo), hay que tener un Dockerfile.gpu separado o parametrizar el index. M5 corre en notebook fuera del repo, así que no afecta producción.
-- Cuatro variables de entorno extra en `ENV`. Trivial pero hay que recordarlas si alguien debugga "¿por qué HuggingFace está cacheando aquí?".
+**Negatives:**
+- The Dockerfile gains ~10 lines of complexity (extra-index-url, opencv uninstall+reinstall, chown, env vars). Documented inline with short comments that point to this ADR.
+- If GPU is needed in the future (local M5 fine-tuning with CUDA, for example), a separate Dockerfile.gpu is required or the index must be parameterized. M5 runs in a notebook outside the repo, so it does not affect production.
+- Four extra environment variables in `ENV`. Trivial, but they have to be remembered if someone debugs "why is HuggingFace caching here?".
 
-**Operativas:**
-- El primer cold-start en prod descarga ~80 MB RT-DETR-l + ~150 MB SAM 2 desde Ultralytics CDN + HuggingFace Hub. Toma 30–90s según red. El healthcheck `start_period: 120s` ya cubre eso (ADR 0009).
-- Redeploys subsecuentes hit cache-warm (volumen `models-cache` persiste). Cold-start <10s.
-- `/api/health` con `detector_backend:"rtdetr"` y `models_loaded:true` es la señal de "M3 real corriendo, listo para `/analyze`".
+**Operational:**
+- The first cold start in prod downloads ~80 MB of RT-DETR-l + ~150 MB of SAM 2 from the Ultralytics CDN + HuggingFace Hub. It takes 30–90s depending on the network. The `start_period: 120s` healthcheck already covers that (ADR 0009).
+- Subsequent redeploys hit a warm cache (the `models-cache` volume persists). Cold start <10s.
+- `/api/health` with `detector_backend:"rtdetr"` and `models_loaded:true` is the "real M3 running, ready for `/analyze`" signal.
 
-## Alternativas consideradas
+## Alternatives considered
 
-- **`pip install --no-deps torch` y declarar manualmente todas las deps no-NVIDIA.** Frágil — cualquier minor bump de PyTorch puede mover deps; perdemos la garantía del lockfile.
-- **Multi-stage con NVIDIA stack en un layer separado y borrado al final.** No funciona: `pip install` no permite "instalar y borrar selectivamente"; los `.so` quedan referenciados por torch.
-- **Usar imagen base `pytorch/pytorch:2.x-cpu`.** Más grande de baseline (~1.5 GB vs ~120 MB de slim) y arrastra utilities que no usamos. La ganancia neta es nula.
-- **Build de Coolify en un VPS más grande.** No ataca el root cause (image bloat) y cuesta dinero recurrente para desplazar un workload que cabe en 2.5 GB.
-- **Copiar pre-fetcheado los pesos al image en build-time** (en lugar de descargar en runtime). Inflaria la imagen otros 230 MB; preferimos cold-start lento la primera vez con cache caliente persistente.
-- **Para los permisos: cambiar a `useradd --create-home` y dejar HuggingFace cachear en `~/.cache/huggingface`.** Funciona pero el cache se pierde en cada redeploy (no es volumen). El fix elegido (HF_HOME al volumen) sobrevive redeploys.
-- **Para opencv: instalar `libxcb1 libgl1 libglib2.0-0` en el apt-get step y dejar opencv-python full.** Añade ~10 MB al sistema base, pero deja la wheel duplicada (~70 MB de cv2/ shadowed). Net wash de tamaño y deja un foot-gun futuro (alguien podría usar GUI funcs por accidente).
+- **`pip install --no-deps torch` and manually declare all non-NVIDIA dependencies.** Fragile — any minor PyTorch bump can shift dependencies; we lose the lockfile guarantee.
+- **Multi-stage with the NVIDIA stack in a separate layer, deleted at the end.** Does not work: `pip install` does not allow "install and selectively delete"; the `.so` files remain referenced by torch.
+- **Use a `pytorch/pytorch:2.x-cpu` base image.** Larger baseline (~1.5 GB vs ~120 MB for slim) and pulls in utilities we do not use. The net gain is nil.
+- **Run the Coolify build on a larger VPS.** Does not attack the root cause (image bloat) and costs recurring money to shift a workload that fits in 2.5 GB.
+- **Copy pre-fetched weights into the image at build time** (instead of downloading at runtime). It would inflate the image by another 230 MB; we prefer a slow cold start the first time with a persistent warm cache.
+- **For the permissions: switch to `useradd --create-home` and let HuggingFace cache in `~/.cache/huggingface`.** Works, but the cache is lost on every redeploy (it is not a volume). The chosen fix (HF_HOME pointing to the volume) survives redeploys.
+- **For opencv: install `libxcb1 libgl1 libglib2.0-0` in the apt-get step and keep full opencv-python.** Adds ~10 MB to the base system, but leaves the duplicated wheel (~70 MB of shadowed `cv2/`). A net wash on size, and it leaves a future foot-gun (someone could use GUI functions by accident).
 
-## Notas para publicación
+## Notes for publication
 
-Este ADR documenta un ciclo de "el código verde local no es deploy verde en prod" que es genérico para cualquier stack PyTorch + ultralytics + transformers desplegado en CPU. Los cuatro fallos son reproducibles paso a paso y comunes para quien intente desplegar Ultralytics en un VPS modesto:
+This ADR documents a "green code locally is not a green deploy in prod" cycle that is generic for any PyTorch + ultralytics + transformers stack deployed on CPU. The four failures are reproducible step by step and common for anyone trying to deploy Ultralytics on a modest VPS:
 
-1. **Build OOM/disk** — pasa con cualquier image que arrastre torch CUDA por default.
-2. **opencv-python double install** — pasa con cualquier proyecto que use ultralytics + slim images.
-3. **WORKDIR no writable por non-root user** — pasa cada vez que ultralytics descarga assets en runtime.
-4. **`$HOME` inválido para non-root sin `--create-home`** — pasa con cualquier librería HuggingFace en non-root containers.
+1. **Build OOM/disk** — happens with any image that pulls in torch CUDA by default.
+2. **opencv-python double install** — happens with any project that uses ultralytics + slim images.
+3. **WORKDIR not writable by a non-root user** — happens every time ultralytics downloads assets at runtime.
+4. **Invalid `$HOME` for a non-root user without `--create-home`** — happens with any HuggingFace library in non-root containers.
 
-Detectar todo esto sin un `docker build` local + smoke run es prácticamente imposible — los tests del pipeline corren contra el venv del host, no contra la imagen final. **Lección operacional para registrar:** el `make test` verde no implica `coolify deploy` verde; el quality gate "real" del milestone es un smoke `docker compose build backend && docker run` ejecutado al menos una vez antes de cerrar la fase.
+Detecting all of this without a local `docker build` + smoke run is practically impossible — the pipeline tests run against the host venv, not against the final image. **Operational lesson to record:** a green `make test` does not imply a green `coolify deploy`; the "real" quality gate for the milestone is a `docker compose build backend && docker run` smoke test executed at least once before closing the phase.
 
-## Referencias
+## References
 
-- [`Docs/decisions/0009-cold-start-cpu.md`](0009-cold-start-cpu.md) — preload síncrono en lifespan; este ADR conserva el contrato.
-- [`Docs/decisions/0008-rtdetr-vs-yolo.md`](0008-rtdetr-vs-yolo.md) — RT-DETR como detector default; sigue activo en CPU.
-- [`Docs/decisions/0010-sam2-zero-shot.md`](0010-sam2-zero-shot.md) — SAM 2 hiera-tiny vía HuggingFace Hub; el cache redirect lo cubre.
-- [PyTorch CPU index](https://download.pytorch.org/whl/cpu) — wheels sin CUDA.
-- [HuggingFace `HF_HOME`](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/environment_variables#hfhome) — variable que controla el root del cache.
-- [Ultralytics download path](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/utils/downloads.py) — descarga al CWD por default.
+- [`Docs/decisions/0009-cold-start-cpu.md`](0009-cold-start-cpu.md) — synchronous preload in the lifespan; this ADR preserves the contract.
+- [`Docs/decisions/0008-rtdetr-vs-yolo.md`](0008-rtdetr-vs-yolo.md) — RT-DETR as the default detector; still active on CPU.
+- [`Docs/decisions/0010-sam2-zero-shot.md`](0010-sam2-zero-shot.md) — SAM 2 hiera-tiny via HuggingFace Hub; the cache redirect covers it.
+- [PyTorch CPU index](https://download.pytorch.org/whl/cpu) — CUDA-free wheels.
+- [HuggingFace `HF_HOME`](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/environment_variables#hfhome) — the variable that controls the cache root.
+- [Ultralytics download path](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/utils/downloads.py) — downloads to the CWD by default.

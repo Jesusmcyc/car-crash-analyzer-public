@@ -1,56 +1,56 @@
-# ADR 0007 — Conectividad prod: same-origin via nginx `/api` proxy
+# ADR 0007 — Production connectivity: same-origin via nginx `/api` proxy
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-03
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-03
+**Author:** Jesús Moreno
 
-## Contexto
+## Context
 
-En el deploy a Coolify (Traefik termina TLS y rutea por dominio a un único servicio), el frontend (SPA estático servido por `nginx:alpine`) y el backend (uvicorn) corren como contenedores separados sobre la misma red de Docker, pero el navegador del cliente final está fuera de esa red.
+In the Coolify deployment (Traefik terminates TLS and routes by domain to a single service), the frontend (a static SPA served by `nginx:alpine`) and the backend (uvicorn) run as separate containers on the same Docker network, but the end client's browser is outside that network.
 
-El cliente HTTP del frontend (`frontend/src/api/client.ts`) lee `VITE_API_BASE_URL` en build-time, con default `http://localhost:8000`. Si la imagen prod sale con ese default, el browser intenta hablarle a `http://localhost:8000` (la máquina del usuario), no al backend real, y el endpoint `/analyze` falla.
+The frontend's HTTP client (`frontend/src/api/client.ts`) reads `VITE_API_BASE_URL` at build time, with a default of `http://localhost:8000`. If the prod image ships with that default, the browser tries to talk to `http://localhost:8000` (the user's own machine), not the real backend, and the `/analyze` endpoint fails.
 
-Tres patrones para resolverlo:
+Three patterns to solve it:
 
-1. Mismo dominio + reverse proxy en el frontend nginx (`/api/*` → `backend:8000/*`).
-2. Dos dominios separados (`demo.com` para frontend, `api.demo.com` para backend) con CORS.
-3. Routing path-based en el reverse proxy de Coolify (Traefik labels) directo a dos servicios.
+1. Same domain + reverse proxy in the frontend nginx (`/api/*` → `backend:8000/*`).
+2. Two separate domains (`demo.com` for the frontend, `api.demo.com` for the backend) with CORS.
+3. Path-based routing in Coolify's reverse proxy (Traefik labels) directly to two services.
 
-## Decisión
+## Decision
 
-Patrón 1: same-origin con `/api` proxeado por el nginx del frontend.
+Pattern 1: same-origin with `/api` proxied by the frontend's nginx.
 
-Cambios concretos:
+Concrete changes:
 
-- `frontend/nginx.conf` añade un `location /api/ { proxy_pass http://backend:8000/; }` con headers de proxy estándar (`Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Request-ID`) y `proxy_read_timeout 60s`. `client_max_body_size 12m` deja margen sobre `MAX_UPLOAD_BYTES` (10 MB).
-- `frontend/Dockerfile` declara `ARG VITE_API_BASE_URL=/api` y lo expone como `ENV` antes de `npm run build`. La imagen prod queda con `/api` baked-in.
-- `docker-compose.prod.yml` pasa `args: { VITE_API_BASE_URL: "/api" }` al build del frontend (explícito; no depende del default del Dockerfile).
-- Dev local (`docker-compose.yml` y `vite dev`) no se toca: el browser está en `localhost`, el default `http://localhost:8000` del client funciona porque el backend dev expone `:8000` al host.
-- `CORS_ORIGINS` en prod queda sin uso efectivo (mismo origen, sin preflight); se mantiene como opcional para escenarios futuros.
+- `frontend/nginx.conf` adds a `location /api/ { proxy_pass http://backend:8000/; }` with standard proxy headers (`Host`, `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto`, `X-Request-ID`) and `proxy_read_timeout 60s`. `client_max_body_size 12m` leaves headroom over `MAX_UPLOAD_BYTES` (10 MB).
+- `frontend/Dockerfile` declares `ARG VITE_API_BASE_URL=/api` and exposes it as an `ENV` before `npm run build`. The prod image ends up with `/api` baked in.
+- `docker-compose.prod.yml` passes `args: { VITE_API_BASE_URL: "/api" }` to the frontend build (explicit; it does not rely on the Dockerfile default).
+- Local dev (`docker-compose.yml` and `vite dev`) is left untouched: the browser is on `localhost`, and the client's `http://localhost:8000` default works because the dev backend exposes `:8000` to the host.
+- `CORS_ORIGINS` in prod ends up effectively unused (same origin, no preflight); it is kept as optional for future scenarios.
 
-## Consecuencias
+## Consequences
 
-### Positivas
-- Un único dominio público — encaja con el modelo "un servicio por dominio" de Coolify sin labels custom.
-- Sin CORS, sin preflight `OPTIONS` — un round-trip menos por request.
-- HTTPS termina en Coolify y la pieza interna `backend:8000` no se expone jamás a internet.
-- `X-Request-ID` cruza el proxy y el middleware del backend lo respeta — la traza request_id se preserva extremo a extremo.
-- Portable: si mañana cambiamos Coolify por otro PaaS o por k8s, el patrón nginx sigue funcionando sin cambios en la app.
+### Positives
+- A single public domain — it fits Coolify's "one service per domain" model without custom labels.
+- No CORS, no preflight `OPTIONS` — one fewer round-trip per request.
+- HTTPS terminates at Coolify and the internal `backend:8000` piece is never exposed to the internet.
+- `X-Request-ID` crosses the proxy and the backend middleware honors it — the request_id trace is preserved end to end.
+- Portable: if we swap Coolify tomorrow for another PaaS or for k8s, the nginx pattern keeps working with no changes to the app.
 
-### Negativas
-- Un hop nginx más en cada request (~1 ms en LAN; despreciable).
-- `proxy_read_timeout 60s` cubre el mock; en M3, cuando la inferencia real puede tardar más, hay que subirlo y/o introducir streaming. Riesgo conocido, mitigación trivial.
-- `/api/*` queda reservado en el frontend — un asset accidentalmente bajo `/api/...` chocaría con el proxy. No hay assets así hoy y la convención está documentada.
-- `VITE_API_BASE_URL` está baked en la imagen — para ambientes adicionales (staging) hay que rebuild. Aceptable: solo hay un demo.
+### Negatives
+- One extra nginx hop on every request (~1 ms on a LAN; negligible).
+- `proxy_read_timeout 60s` covers the mock; in M3, when real inference can take longer, it has to be raised and/or streaming has to be introduced. A known risk with a trivial mitigation.
+- `/api/*` is reserved in the frontend — an asset accidentally placed under `/api/...` would collide with the proxy. There are no such assets today and the convention is documented.
+- `VITE_API_BASE_URL` is baked into the image — for additional environments (staging) a rebuild is required. Acceptable: there is only one demo.
 
-## Alternativas consideradas
+## Alternatives considered
 
-1. **Dos dominios + CORS.** Duplica certificado TLS, requiere `CORS_ORIGINS` configurado y propagación DNS adicional. Operacionalmente más caro para un demo de un solo equipo. Rechazada.
-2. **Backend expuesto público con CORS abierto.** Aumenta superficie de ataque (rate-limit y auth tendrían que blindar el `/analyze` directamente expuesto). Rechazada para portfolio público.
-3. **Routing path-based con Traefik labels en `docker-compose.prod.yml`.** Funciona pero amarra el repo a Coolify/Traefik. Rechazada por portabilidad.
+1. **Two domains + CORS.** Duplicates the TLS certificate, requires `CORS_ORIGINS` to be configured, and adds DNS propagation. Operationally more expensive for a single-team demo. Rejected.
+2. **Backend exposed publicly with open CORS.** Increases the attack surface (rate-limiting and auth would have to harden a directly exposed `/analyze`). Rejected for a public portfolio.
+3. **Path-based routing with Traefik labels in `docker-compose.prod.yml`.** It works, but it ties the repo to Coolify/Traefik. Rejected for portability.
 
-## Referencias
+## References
 
-- design doc sec D3 (frontend serving en nginx).
-- [`Docs/decisions/0006-frontend-serving-nginx.md`](0006-frontend-serving-nginx.md) — la base que este ADR extiende.
-- `backend/app/api/middleware.py` — `RequestIdMiddleware` que consume `X-Request-ID` propagado por el proxy.
+- design doc sec D3 (frontend serving in nginx).
+- [`Docs/decisions/0006-frontend-serving-nginx.md`](0006-frontend-serving-nginx.md) — the foundation this ADR extends.
+- `backend/app/api/middleware.py` — `RequestIdMiddleware`, which consumes the `X-Request-ID` propagated by the proxy.

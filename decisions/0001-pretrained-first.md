@@ -1,39 +1,39 @@
-# ADR 0001 — Pretrained-first: el pipeline se construye sobre modelos preentrenados antes de cualquier fine-tune
+# ADR 0001 — Pretrained-first: the pipeline is built on pretrained models before any fine-tune
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-03
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-03
+**Author:** Jesús Moreno
 
-## Contexto
+## Context
 
-El proyecto Car Crash Analyzer (architecture doc) tiene dos componentes ML core: un detector de daños y un segmentador. El roadmap (sec 12) contempla fine-tunear RT-DETRv2 sobre el dataset CarDD en una fase posterior (Fase 4 / M5).
+The Car Crash Analyzer project (architecture doc) has two core ML components: a damage detector and a segmenter. The roadmap (sec 12) plans to fine-tune RT-DETRv2 on the CarDD dataset in a later phase (Phase 4 / M5).
 
-La pregunta arquitectónica al iniciar el proyecto es: **¿se construye el pipeline directamente con pesos fine-tuneados, o se ensambla primero con modelos preentrenados y se sustituyen los pesos después?**
+The architectural question at the start of the project is: **do we build the pipeline directly with fine-tuned weights, or do we assemble it first with pretrained models and swap the weights in later?**
 
-## Decisión
+## Decision
 
-**El pipeline (M0–M4) corre exclusivamente con modelos preentrenados.** El fine-tune con CarDD ocurre en M5 como hito paralelo, y los pesos resultantes se sueltan al backend mediante una variable de entorno (`DETECTOR_WEIGHTS`) sin tocar código de aplicación.
+**The pipeline (M0–M4) runs exclusively on pretrained models.** The CarDD fine-tune happens in M5 as a parallel milestone, and the resulting weights are dropped into the backend through an environment variable (`DETECTOR_WEIGHTS`) without touching any application code.
 
-## Consecuencias
+## Consequences
 
-### Positivas
+### Positives
 
-- **Trabajo paralelo:** mientras se construye y despliega el pipeline (M0–M4), el fine-tune puede prepararse en notebook aparte sin bloquearse mutuamente.
-- **Riesgo aislado:** los problemas de entrenamiento (convergencia, overfitting, pérdida de mAP en clases raras) no contaminan el debugging de la app.
-- **Fallback obvio:** si el fine-tune no mejora la baseline preentrenada, el sistema funciona igual con los pesos originales. El "downside" del fine-tune es cero.
-- **Reproducibilidad para el revisor:** alguien puede levantar el demo sin tener acceso al checkpoint custom, solo con pesos públicos.
+- **Parallel work:** while the pipeline is being built and deployed (M0–M4), the fine-tune can be prepared in a separate notebook without either blocking the other.
+- **Isolated risk:** training problems (convergence, overfitting, loss of mAP on rare classes) do not contaminate the debugging of the app.
+- **Obvious fallback:** if the fine-tune does not improve on the pretrained baseline, the system works just the same with the original weights. The downside of the fine-tune is zero.
+- **Reproducibility for the reviewer:** anyone can spin up the demo without access to the custom checkpoint, using only public weights.
 
-### Negativas
+### Negatives
 
-- **Detecciones M0–M4 no son específicas de CarDD.** RT-DETRv2 preentrenado en COCO no conoce categorías como `crack` o `broken_lamp` directamente; en M2 se mapean clases COCO genéricas a las categorías del dominio mediante un dict (es una aproximación; M5 lo arregla).
-- **Métricas de M2/M3 no son finales.** No se debe presentar el demo M0–M4 con afirmaciones de precisión hasta que M5 cierre.
+- **M0–M4 detections are not specific to CarDD.** RT-DETRv2 pretrained on COCO does not know categories such as `crack` or `broken_lamp` directly; in M2, generic COCO classes are mapped to the domain categories through a dict (it is an approximation; M5 fixes it).
+- **M2/M3 metrics are not final.** The M0–M4 demo must not be presented with accuracy claims until M5 is closed.
 
-## Alternativas consideradas
+## Alternatives considered
 
-1. **Esperar a tener pesos fine-tuneados antes de empezar el backend.** Rechazada — bloquea M0–M4 por días/semanas según ritmo de entrenamiento, y deja el riesgo de deploy sin descubrir.
-2. **Entrenar desde cero.** Fuera de alcance.
+1. **Wait for fine-tuned weights before starting the backend.** Rejected — it blocks M0–M4 for days or weeks depending on training pace, and leaves the deployment risk undiscovered.
+2. **Train from scratch.** Out of scope.
 
-## Referencias
+## References
 
 - architecture doc sec 12 (Roadmap).
 - design doc sec 3 → M0–M5.

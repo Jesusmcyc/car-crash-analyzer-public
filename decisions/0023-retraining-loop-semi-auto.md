@@ -1,111 +1,111 @@
-# ADR 0023 — Retraining loop: cron semanal de export + anotación manual + retrain en Colab
+# ADR 0023 — Retraining loop: weekly export cron + manual annotation + retrain in Colab
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-18
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-18
+**Author:** Jesús Moreno
 **Milestone:** M7
 
-## Contexto
+## Context
 
-M7 spec D6 define la cadencia de re-entrenamiento del modelo con las imágenes donadas. El operador es single (Jesús), no hay equipo de ML ops. El budget de cómputo es Colab Pay As You Go ($10 destrabó M5 — patrón comprobado).
+M7 spec D6 defines the cadence for retraining the model with donated images. The operator is a single person (Jesús); there is no ML ops team. The compute budget is Colab Pay As You Go ($10 unblocked M5 — a proven pattern).
 
-Tres opciones evaluadas para la cadencia (5a/5b/5c del menú original):
+Three options were evaluated for the cadence (5a/5b/5c from the original menu):
 
-- **5a — Manual batched.** Operador descarga mensualmente, anota offline, retrena en Colab.
-- **5b — Semi-auto con cron** (decisión del operador). Cron semanal exporta nuevas filas a un folder de anotación; operador ejecuta el anotado+retrain cuando lo decide.
-- **5c — Auto-label con confidence threshold.** El modelo actual auto-anota lo que detecta con confianza alta; bajo confianza va a queue manual.
+- **5a — Manual batched.** The operator downloads monthly, annotates offline, and retrains in Colab.
+- **5b — Semi-auto with cron** (operator's decision). A weekly cron exports new rows to an annotation folder; the operator runs the annotation + retrain whenever they decide.
+- **5c — Auto-label with confidence threshold.** The current model auto-annotates anything it detects with high confidence; low-confidence detections go to a manual queue.
 
-## Decisión
+## Decision
 
-**Opción 5b — Semi-auto con cron semanal de export + anotación manual + retrain en Colab.**
+**Option 5b — Semi-auto with weekly export cron + manual annotation + retrain in Colab.**
 
-### Flujo operativo
+### Operational flow
 
-1. **Cron self-scheduled** en container separado `cron-export` corre cada domingo a las 02:00 UTC.
-2. **Export** de las filas con `status = 'pending'` a `/app/contributions/exports/YYYY-WNN/`:
+1. **Self-scheduled cron** in a separate `cron-export` container runs every Sunday at 02:00 UTC.
+2. **Export** of the rows with `status = 'pending'` to `/app/contributions/exports/YYYY-WNN/`:
    ```
    exports/2026-W22/
    ├── manifest.csv     # id, sha256, uploaded_at, status, request_id
-   ├── images/          # symlinks a /app/contributions/images/{sha256}.jpg
-   └── README.md        # cómo descargarlo + anotación + retrain (operador-facing)
+   ├── images/          # symlinks to /app/contributions/images/{sha256}.jpg
+   └── README.md        # how to download it + annotation + retrain (operator-facing)
    ```
-3. **Operador descarga** vía scp manual cuando decide procesar el batch (semanal, mensual — su elección).
-4. **Anotación offline** en Roboflow (free tier ≤1000 imgs/proyecto) o LabelImg local. Output COCO format.
-5. **COCO → YOLO** vía script existente `scripts/cardd_coco_to_yolo.py` (extendido si necesario).
-6. **Merge al training set CarDD** + new batch, retrain en Colab (M5).
-7. **Eval contra test split CarDD original** (no incluir contribs nuevos en eval — evita leak).
-8. **Verdict deploy** si thresholds D7 del M5 spec se cumplen.
-9. **Update pesos** (`rtdetr-cardd.pt`) en volumen Coolify vía scp (mismo patrón M5 T9).
-10. **Mark `contributions.status = 'trained'`** para las filas usadas + insert en `training_runs` + `training_contributions`.
-11. **Notify subscribers** con `python scripts/notify_contributors.py --model-version=rtdetr-cardd-v2`.
+3. **The operator downloads** via manual scp when they decide to process the batch (weekly, monthly — their choice).
+4. **Offline annotation** in Roboflow (free tier ≤1000 imgs/project) or LabelImg locally. Output in COCO format.
+5. **COCO → YOLO** via the existing script `scripts/cardd_coco_to_yolo.py` (extended if necessary).
+6. **Merge into the CarDD training set** + new batch, retrain in Colab (M5).
+7. **Eval against the original CarDD test split** (do not include new contributions in the eval — avoids leak).
+8. **Deploy verdict** if the D7 thresholds from the M5 spec are met.
+9. **Update the weights** (`rtdetr-cardd.pt`) on the Coolify volume via scp (same pattern as M5 T9).
+10. **Mark `contributions.status = 'trained'`** for the rows used + insert into `training_runs` and `training_contributions`.
+11. **Notify subscribers** with `python scripts/notify_contributors.py --model-version=rtdetr-cardd-v2`.
 
-### Implementación técnica
+### Technical implementation
 
-- **Cron self-scheduled** (no crond, no ofelia): el script `export_weekly_batch.py` ejecuta un loop `while True: sleep_until_next_sunday_2am_utc(); run_once()`. Container restart pierde el sleep pero el siguiente domingo ejecuta normal. Simple, sin dependencias.
-- **Symlinks en el folder de export** (no copias) para no duplicar bytes.
-- **`manifest.csv` con sha256** para que el operador verifique integridad post-scp.
-- **README.md por batch** con instrucciones operativas: cómo anotar, qué clase corresponde a qué, qué hacer si la imagen es basura.
+- **Self-scheduled cron** (no crond, no ofelia): the `export_weekly_batch.py` script runs a loop `while True: sleep_until_next_sunday_2am_utc(); run_once()`. A container restart loses the sleep, but the next Sunday it runs normally. Simple, with no dependencies.
+- **Symlinks in the export folder** (not copies) to avoid duplicating bytes.
+- **`manifest.csv` with sha256** so the operator can verify integrity after scp.
+- **A README.md per batch** with operational instructions: how to annotate, which class corresponds to what, what to do if the image is garbage.
 
-## Consecuencias
+## Consequences
 
-### Positivas
+### Positives
 
-- **Manual annotation preserva calidad del dataset.** Auto-label con confidence threshold introduce sesgo (el modelo aprende a confirmar lo que ya cree); semi-auto con propagation+revision es estándar de la industria.
-- **Verdict gate humano antes del deploy** del nuevo peso. M5 estableció thresholds pre-comprometidos (D7 spec M5); este loop hereda esos thresholds. El operador no deploya basura solo porque sí.
-- **Operador en control del momento de retrain.** Cron solo exporta; no consume Colab compute units por sí mismo. El operador decide cuándo gastar (típicamente cuando el batch acumulado justifica el costo).
-- **Mismo workflow probado en M5.** El notebook `T7-runbook.md` ya funciona; este loop es repetir M5 con un dataset mergeado.
-- **Container `cron-export` separado del backend.** Si el cron tiene un bug y se cae, el backend sigue funcionando. Si el backend cae, el cron sigue exportando (datos quedan en `pending`).
+- **Manual annotation preserves dataset quality.** Auto-label with a confidence threshold introduces bias (the model learns to confirm what it already believes); semi-auto with propagation + revision is the industry standard.
+- **A human verdict gate before deploying** the new weights. M5 established pre-committed thresholds (D7 of the M5 spec); this loop inherits those thresholds. The operator does not deploy garbage just because.
+- **The operator controls the timing of the retrain.** The cron only exports; it does not consume Colab compute units on its own. The operator decides when to spend (typically when the accumulated batch justifies the cost).
+- **The same workflow proven in M5.** The `T7-runbook.md` notebook already works; this loop is a repeat of M5 with a merged dataset.
+- **The `cron-export` container is separate from the backend.** If the cron has a bug and crashes, the backend keeps running. If the backend crashes, the cron keeps exporting (data stays `pending`).
 
-### Negativas
+### Negatives
 
-- **Cadencia humana puede saturarse.** Si el batch crece más rápido que la atención del operador (ej. el demo se vuelve viral en LinkedIn), las filas `pending` se acumulan. Mitigación: monitor manual con `SELECT COUNT(*) WHERE status='pending'` mensual.
-- **No hay active learning** (el modelo no elige qué samples necesita más). El operador anota lo que llegó, no lo más útil. Trade-off explícito.
-- **Anotación humana es lenta** (~30s/img razonable). 100 imgs = 50 min de trabajo. Mitigación: el operador anota el batch que mejor le aporta (skip de imágenes ambiguas o basura).
-- **Si el container `cron-export` muere durante el export**, ese batch específico queda incompleto. Mitigación: el script es idempotente — siguiente run reprocesa filas pendientes.
+- **The human cadence can become saturated.** If the batch grows faster than the operator's attention (e.g. the demo goes viral on LinkedIn), `pending` rows pile up. Mitigation: a manual monthly monitor with `SELECT COUNT(*) WHERE status='pending'`.
+- **There is no active learning** (the model does not choose which samples it needs most). The operator annotates whatever arrived, not what is most useful. An explicit trade-off.
+- **Human annotation is slow** (~30s/img is reasonable). 100 imgs = 50 min of work. Mitigation: the operator annotates the batch that contributes the most (skipping ambiguous or garbage images).
+- **If the `cron-export` container dies during the export**, that specific batch is left incomplete. Mitigation: the script is idempotent — the next run reprocesses the pending rows.
 
-### Neutrales
+### Neutral
 
-- **Roboflow free tier** suficiente para portfolio scale (≤1000 imgs/proyecto). Plan B: LabelImg local si Roboflow privacy es issue.
-- **El batch semanal puede estar vacío** (sin nuevas contribuciones). El script genera CSV vacío y no falla — exportar nada es válido.
-- **`status='trained'` permite analítica** ("cuántas contribuciones han contribuido a un modelo real"). Sirve para LinkedIn posts y para métricas internas del operador.
+- **The Roboflow free tier** is sufficient for portfolio scale (≤1000 imgs/project). Plan B: LabelImg locally if Roboflow privacy is an issue.
+- **The weekly batch may be empty** (no new contributions). The script generates an empty CSV and does not fail — exporting nothing is valid.
+- **`status='trained'` enables analytics** ("how many contributions have contributed to a real model"). Useful for LinkedIn posts and for the operator's internal metrics.
 
-## Alternativas consideradas
+## Alternatives considered
 
-### 5a — Manual batched (sin cron, operador descarga directo)
+### 5a — Manual batched (no cron, operator downloads directly)
 
-- Simpler: el operador hace `sqlite3 db.sqlite ".dump"` + `scp images/` cuando decide.
-- Rechazado por costo de "qué bajar exactamente" — el cron pre-empaqueta el batch, manifest, README. Reduces friction operativa.
+- Simpler: the operator runs `sqlite3 db.sqlite ".dump"` + `scp images/` whenever they decide.
+- Rejected because of the "what exactly to download" cost — the cron pre-packages the batch, manifest, and README. It reduces operational friction.
 
-### 5c — Auto-label con confidence threshold
+### 5c — Auto-label with confidence threshold
 
-- Modelo actual procesa cada contribución; si `confidence > 0.8` para una clase, auto-anota; si no, manual queue.
-- Rechazado: sesgo de confirmación (el modelo refuerza sus propios biases). El per-class de M5 muestra que `scratch` está en mAP 0.51 — auto-anotar lo que el modelo cree son scratches va a reforzar su error sistemático.
-- **Reconsiderable** si se establece una métrica de "deriva del modelo" y el operador tiene budget para revisar el queue manual con la cadencia necesaria.
+- The current model processes every contribution; if `confidence > 0.8` for a class, it auto-annotates; otherwise it goes to a manual queue.
+- Rejected: confirmation bias (the model reinforces its own biases). The per-class results from M5 show that `scratch` is at mAP 0.51 — auto-annotating what the model believes are scratches will reinforce its systematic error.
+- **Reconsiderable** if a "model drift" metric is established and the operator has the budget to review the manual queue at the required cadence.
 
-### Cron diario en lugar de semanal
+### Daily cron instead of weekly
 
-- Innecesariamente granular. El operador no anota diariamente.
-- Rechazado.
+- Unnecessarily granular. The operator does not annotate daily.
+- Rejected.
 
-### Auto-trigger del retrain cuando el batch supera N
+### Auto-triggering the retrain when the batch exceeds N
 
-- Atractivo en abstracto pero peligroso: el retrain consume Colab Pay As You Go = costo $ real. El operador quiere control humano sobre cuándo gastar.
-- Rechazado para M7. Reconsiderable para M8+ si el ciclo se vuelve predecible.
+- Attractive in the abstract but dangerous: the retrain consumes Colab Pay As You Go = real $ cost. The operator wants human control over when to spend.
+- Rejected for M7. Reconsiderable for M8+ if the cycle becomes predictable.
 
-### Annotation con tools custom (ej. Label Studio self-hosted)
+### Annotation with custom tools (e.g. self-hosted Label Studio)
 
-- Más control + más overhead. Roboflow free + LabelImg local cubren el caso.
-- Rechazado por costo operativo.
+- More control + more overhead. Roboflow free + LabelImg locally cover the case.
+- Rejected because of operational cost.
 
-### Eval incluyendo contribuciones nuevas en test split
+### Eval including new contributions in the test split
 
-- Tentador (más data → mejor eval).
-- Rechazado: leak inevitable. El test split CarDD original es el invariante para comparar epochs/runs. Contribuciones nuevas entran solo a train.
+- Tempting (more data → better eval).
+- Rejected: an inevitable leak. The original CarDD test split is the invariant for comparing epochs/runs. New contributions go only into train.
 
-## Referencias
+## References
 
 - design doc — D6 (retraining cadence).
-- design doc — D7 thresholds verdict (heredados).
-- [ADR 0017](0017-finetune-cardd-result.md) — verdict deploy del primer fine-tune (template para los siguientes).
+- design doc — D7 thresholds verdict (inherited).
+- [ADR 0017](0017-finetune-cardd-result.md) — deploy verdict of the first fine-tune (template for the following ones).
 - **Roboflow:** <https://roboflow.com>
 - **LabelImg:** <https://github.com/HumanSignal/labelImg>

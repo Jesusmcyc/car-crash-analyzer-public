@@ -1,64 +1,64 @@
-# ADR 0013 — Tokens CSS auditables + self-host de fuentes
+# ADR 0013 — Auditable CSS tokens + self-hosted fonts
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-03
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-03
+**Author:** Jesús Moreno
 
-## Contexto
+## Context
 
-El demo se presenta en pantalla compartida durante una entrevista técnica. La paleta y la tipografía deben estar formalizadas como tokens auditables (no hex regados en componentes), y las fuentes deben cargar sin ping a CDN externo (privacidad alineada con `architecture doc` sec 10).
+The demo is presented on a shared screen during a technical interview. The palette and typography must be formalized as auditable tokens (not hex values scattered across components), and fonts must load without pinging an external CDN (privacy aligned with `architecture doc` sec 10).
 
-M0 dejó tokens HSL shadcn-style en `frontend/src/styles/globals.css`. M1 añadió hex literales en `frontend/src/lib/colors.ts` para severidad (testeados con Vitest contra valores literales). `frontend/tailwind.config.ts` declara `fontFamily.sans/mono/serif` con Geist Sans / JetBrains Mono / Instrument Serif, pero **no había `@font-face` en ningún lado**: la UI caía a `ui-sans-serif` system fallback silenciosamente.
+M0 left shadcn-style HSL tokens in `frontend/src/styles/globals.css`. M1 added literal hex values in `frontend/src/lib/colors.ts` for severity (tested with Vitest against literal values). `frontend/tailwind.config.ts` declares `fontFamily.sans/mono/serif` with Geist Sans / JetBrains Mono / Instrument Serif, but **there was no `@font-face` anywhere**: the UI silently fell back to the `ui-sans-serif` system font.
 
-## Decisión
+## Decision
 
 ### Tokens
 
-`globals.css :root` se extiende con:
+`globals.css :root` is extended with:
 
-- **Severidad como CSS vars** (`--severity-leve`, `--severity-moderado`, `--severity-severo` y sus `*-fill` rgba). Los valores son los mismos hex literales que `colors.ts` exporta. Un test `tokens.test.ts` lee `globals.css` como string y assertea coincidencia para evitar drift.
-- **Surface tokens** (`--surface-glass`, `--surface-elevated`, `--surface-border`) y un `--radius-lg` (20px) para superficies grandes.
-- **Motion tokens** (`--motion-duration-fast/base/slow`, `--motion-ease-out/in-out`) — Framer Motion los consume vía `lib/motion.ts` (hardcoded en TS por simplicidad SSR/test, mantenido en sync manualmente).
-- **Tipografía como CSS vars** (`--font-sans/mono/serif`) — el theme dark de ECharts las lee con `getComputedStyle`.
+- **Severity as CSS vars** (`--severity-leve`, `--severity-moderado`, `--severity-severo` and their `*-fill` rgba values). The values are the same literal hex values that `colors.ts` exports. A `tokens.test.ts` test reads `globals.css` as a string and asserts a match to prevent drift.
+- **Surface tokens** (`--surface-glass`, `--surface-elevated`, `--surface-border`) and a `--radius-lg` (20px) for large surfaces.
+- **Motion tokens** (`--motion-duration-fast/base/slow`, `--motion-ease-out/in-out`) — Framer Motion consumes them via `lib/motion.ts` (hardcoded in TS for SSR/test simplicity, kept in sync manually).
+- **Typography as CSS vars** (`--font-sans/mono/serif`) — the ECharts dark theme reads them with `getComputedStyle`.
 
-### Fuentes
+### Fonts
 
-Tres familias self-hosted en `frontend/public/fonts/`:
+Three self-hosted families in `frontend/public/fonts/`:
 
 - `geist-sans-variable.woff2` (Vercel, OFL — variable 100..900)
 - `jetbrains-mono-variable.woff2` (JetBrains, OFL — variable 100..800)
-- `instrument-serif-regular.woff2` (Instrument, OFL — 400 normal único weight)
+- `instrument-serif-regular.woff2` (Instrument, OFL — single 400 normal weight)
 
-Total ~120 KB, commiteado al repo. nginx ya cachea `woff2|ttf|otf|eot` con `expires 1y immutable` (heredado de M1, ADR 0006).
+Total ~120 KB, committed to the repo. nginx already caches `woff2|ttf|otf|eot` with `expires 1y immutable` (inherited from M1, ADR 0006).
 
-`@font-face` declarado en `globals.css` con `font-display: swap`. Preload en `index.html` solo de Geist Sans + JetBrains Mono (críticas para UI y datos); Instrument Serif carga lazy con swap.
+`@font-face` is declared in `globals.css` with `font-display: swap`. Preload in `index.html` covers only Geist Sans + JetBrains Mono (critical for UI and data); Instrument Serif loads lazily with swap.
 
-## Consecuencias
+## Consequences
 
-### Positivas
+### Positives
 
-- Paleta auditable: un revisor abre `globals.css` y ve el sistema completo.
-- ECharts puede leer la paleta sin importar TS — desacopla el theme dark de React.
-- Cero requests a `fonts.googleapis.com` o `fonts.gstatic.com`. Privacy alignment.
-- Demo reproducible offline una vez cacheado el HTML.
-- Variable woff2 reduce número de archivos (1 archivo vs ~8 weights × 2 styles tradicional).
+- Auditable palette: a reviewer opens `globals.css` and sees the complete system.
+- ECharts can read the palette without importing TS — it decouples the dark theme from React.
+- Zero requests to `fonts.googleapis.com` or `fonts.gstatic.com`. Privacy alignment.
+- Demo reproducible offline once the HTML is cached.
+- The variable woff2 reduces the number of files (1 file vs ~8 weights × 2 styles in the traditional approach).
 
-### Negativas
+### Negatives
 
-- ~120 KB binarios commiteados al repo. Aceptable para un demo; se justifica por autonomía CDN.
-- Drift potencial entre `globals.css` y `colors.ts` mitigado por `tokens.test.ts` pero requiere mantener ambos en sync.
-- `lib/motion.ts` también puede driftar contra `--motion-*` en CSS (sin test anti-drift por limitaciones de jsdom). Mantenido manualmente.
+- ~120 KB of binaries committed to the repo. Acceptable for a demo; justified by CDN autonomy.
+- Potential drift between `globals.css` and `colors.ts`, mitigated by `tokens.test.ts` but requiring both to be kept in sync.
+- `lib/motion.ts` can also drift against the `--motion-*` CSS vars (no anti-drift test due to jsdom limitations). Maintained manually.
 
-## Alternativas consideradas
+## Alternatives considered
 
-1. **Google Fonts CDN.** Rechazada — privacy ping cada visita; latencia ~50–150ms extra primer load.
-2. **Build step `scripts/fetch-fonts.sh` con sha256 en postinstall.** Rechazada — añade flakiness al build (depende de GitHub raw URLs); commit binarios es coherente con cómo M3 cachea modelos en volumen.
-3. **Tokens solo en `colors.ts` (TS), sin CSS vars.** Rechazada — ECharts no puede importar TS sin acoplar el theme a React; el bundle del theme ya es lo que ECharts pide.
+1. **Google Fonts CDN.** Rejected — privacy ping on every visit; ~50–150ms of extra latency on first load.
+2. **Build step `scripts/fetch-fonts.sh` with sha256 in postinstall.** Rejected — adds flakiness to the build (depends on GitHub raw URLs); committing binaries is consistent with how M3 caches models in a volume.
+3. **Tokens only in `colors.ts` (TS), no CSS vars.** Rejected — ECharts cannot import TS without coupling the theme to React; the theme bundle is exactly what ECharts needs.
 
-## Referencias
+## References
 
 - design doc sec D1+D2.
-- [`Docs/decisions/0006-frontend-serving-nginx.md`](0006-frontend-serving-nginx.md) — nginx cache headers para woff2.
+- [`Docs/decisions/0006-frontend-serving-nginx.md`](0006-frontend-serving-nginx.md) — nginx cache headers for woff2.
 - Geist Sans: https://github.com/vercel/geist-font (OFL).
 - JetBrains Mono: https://github.com/JetBrains/JetBrainsMono (OFL).
 - Instrument Serif: https://github.com/Instrument/instrument-serif (OFL).

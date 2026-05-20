@@ -1,32 +1,32 @@
-# ADR 0005 — DamageOverlay: SVG sobre <img>, no canvas
+# ADR 0005 — DamageOverlay: SVG over <img>, not canvas
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-03
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-03
+**Author:** Jesús Moreno
 
-## Contexto
+## Context
 
-El overlay de daños pinta polígonos sobre la imagen subida. Para M1 (mock con 3 polígonos) y M3 (segmentación real con SAM 2) hay dos enfoques mainstream: HTML canvas o SVG declarativo dentro del DOM.
+The damage overlay paints polygons on top of the uploaded image. For M1 (mock with 3 polygons) and M3 (real segmentation with SAM 2) there are two mainstream approaches: an HTML canvas or declarative SVG inside the DOM.
 
-## Decisión
+## Decision
 
-Renderizar un `<svg>` absolute-positioned encima de la `<img>` con `viewBox` igual a las dimensiones intrínsecas de la imagen. Cada `Damage` produce un `<polygon>` con stroke y fill semitransparente derivados de la severidad.
+Render an absolute-positioned `<svg>` on top of the `<img>`, with a `viewBox` equal to the intrinsic dimensions of the image. Each `Damage` produces a `<polygon>` with a stroke and a semi-transparent fill derived from the severity.
 
-## Consecuencias
+## Consequences
 
-### Positivas
-- Tests Vitest queryan `<polygon>` directo via Testing Library — sin mocks de `getContext("2d")` ni snapshots de píxeles.
-- Hover, selección de daño y tooltips se montan con event handlers React idiomáticos.
-- Zoom y export PNG futuros: SVG escala sin pérdida; canvas queda atado al device pixel ratio.
-- Accesibilidad: `<svg role="img" aria-label="...">` tiene mejor soporte que canvas.
+### Positives
+- Vitest tests query `<polygon>` directly via Testing Library — no mocks of `getContext("2d")` and no pixel snapshots.
+- Hover, damage selection, and tooltips are wired up with idiomatic React event handlers.
+- Future zoom and PNG export: SVG scales without loss; a canvas is tied to the device pixel ratio.
+- Accessibility: `<svg role="img" aria-label="...">` has better support than canvas.
 
-### Negativas
-- Con máscaras densas (cientos de vértices por polígono) SVG puede generar jank al re-renderizar. Si se manifiesta en M3, refactorizar a canvas o a `<canvas>` aislado (offscreen).
+### Negatives
+- With dense masks (hundreds of vertices per polygon), SVG can produce jank when re-rendering. If this shows up in M3, refactor to a canvas or to an isolated (offscreen) `<canvas>`.
 
-## Alternativas consideradas
+## Alternatives considered
 
-1. **Canvas HTML5.** Ventaja: rendimiento en miles de shapes. Rechazada para M1–M3 porque la densidad esperada (≤5 polígonos en M1, ~5 más densos en M3) está muy por debajo del umbral donde canvas gana.
-2. **WebGL / shaders.** Sobre-ingeniería para un demo; rechazada.
+1. **HTML5 canvas.** Advantage: performance with thousands of shapes. Rejected for M1–M3 because the expected density (≤5 polygons in M1, ~5 denser ones in M3) is well below the threshold where canvas wins.
+2. **WebGL / shaders.** Over-engineering for a demo; rejected.
 
-## Referencias
+## References
 - design doc sec D2.

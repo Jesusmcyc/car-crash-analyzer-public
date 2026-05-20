@@ -1,32 +1,32 @@
-# ADR 0011 — Heurística de severidad explicable
+# ADR 0011 — Explainable severity heuristic
 
-**Estado:** Aceptado
-**Fecha:** 2026-05-03
-**Autor:** Jesús Moreno
+**Status:** Accepted
+**Date:** 2026-05-03
+**Author:** Jesús Moreno
 **Milestone:** M3
-**Spec asociado:** design doc sec D4
+**Related spec:** design doc sec D4
 
-## Contexto
+## Context
 
-CarDD no incluye anotaciones de severidad real (LEVE/MODERADO/SEVERO);
-únicamente clases de daño. Sin datos supervisados, un modelo aprendido para
-severidad sería ruido — el spec del proyecto exige que la
-severidad sea heurística explicable, no modelo aprendido.
+CarDD does not include real severity annotations (LEVE/MODERADO/SEVERO);
+only damage classes. Without supervised data, a learned model for
+severity would be noise — the project spec requires that
+severity be an explainable heuristic, not a learned model.
 
-Tres dimensiones intuitivas para combinar:
-- **Área relativa** del daño respecto al vehículo.
-- **Tipo de daño** (vidrio roto > grieta > abolladura > rayón).
-- **Posición** (chasis principal vs cosmético).
+Three intuitive dimensions to combine:
+- **Relative area** of the damage with respect to the vehicle.
+- **Damage type** (broken glass > crack > dent > scratch).
+- **Position** (main chassis vs cosmetic).
 
-## Decisión
+## Decision
 
-Score multiplicativo:
+A multiplicative score:
 
 ```
 score = area_ratio × type_weight × position_weight
 ```
 
-con:
+with:
 
 | DamageType | type_weight |
 |---|---|
@@ -37,75 +37,75 @@ con:
 | FLAT_TIRE | 0.4 |
 | SCRATCH | 0.3 |
 
-`position_weight = 1.15` si el centroide del bbox cae en `0.30 ≤ y_norm ≤ 0.70`
-(zona vertical de chasis principal); `1.0` en otro caso.
+`position_weight = 1.15` if the bbox centroid falls within `0.30 ≤ y_norm ≤ 0.70`
+(the vertical band of the main chassis); `1.0` otherwise.
 
-`area_ratio = mask.area_px / vehicle_bbox.area_px`, capado a `[0, 1]`. Si no
-hay vehicle_bbox dominante, fallback a image_dims.
+`area_ratio = mask.area_px / vehicle_bbox.area_px`, capped to `[0, 1]`. If there
+is no dominant vehicle_bbox, it falls back to image_dims.
 
-Mapeo a Severity por umbrales sobre el score:
+Mapping to Severity via thresholds on the score:
 - `score < 0.04` → LEVE
 - `0.04 ≤ score < 0.12` → MODERADO
 - `score ≥ 0.12` → SEVERO
 
-`severity_factors` del response contiene exactamente las llaves
-`{area_ratio, type_weight, position_weight}` — el frontend M1 ya las renderiza.
+The response's `severity_factors` contains exactly the keys
+`{area_ratio, type_weight, position_weight}` — the M1 frontend already renders them.
 
-**Cost ranges:** mantener placeholders M1 (LEVE 2k–8k, MODERADO 8k–25k,
-SEVERO 25k–80k MXN). Documentados como "demo, no estudio actuarial" en
-`reporter.py`. Calibrar requiere datos actuariales fuera de scope.
+**Cost ranges:** keep the M1 placeholders (LEVE 2k–8k, MODERADO 8k–25k,
+SEVERO 25k–80k MXN). Documented as "demo, not an actuarial study" in
+`reporter.py`. Calibrating them requires actuarial data, which is out of scope.
 
-**Fallback bbox-polygon:** cuando SAM 2 rechaza la máscara (D3), el `Damage`
-mantiene el contrato `Mask.polygon ≥ 3` con un polígono derivado del bbox.
-La severidad usa `area_ratio=0` vía `estimate_damage(mask=None)`.
+**Bbox-polygon fallback:** when SAM 2 rejects the mask (D3), the `Damage`
+keeps the `Mask.polygon ≥ 3` contract with a polygon derived from the bbox.
+Severity then uses `area_ratio=0` via `estimate_damage(mask=None)`.
 
-## Consecuencias
+## Consequences
 
-### Positivas
+### Positives
 
-- **Multiplicativo captura intuición humana.** Un vidrio roto pequeño en
-  chasis (8% × 1.0 × 1.15 = 0.092 MODERADO) vs un rayón grande fuera de chasis
-  (30% × 0.3 × 1.0 = 0.09 MODERADO también) → calibración razonable.
-- **Auditable.** Las constantes (`_TYPE_WEIGHTS`, `_POSITION_BAND`,
-  `_SEVERITY_THRESHOLDS`) son públicas en `severity.py`. Un revisor externo
-  puede contrastar sin abrir este ADR.
-- **Frontend cero churn.** Llaves canónicas de severity_factors mantienen
-  compatibilidad con M1.
+- **The multiplicative form captures human intuition.** A small broken-glass area on
+  the chassis (8% × 1.0 × 1.15 = 0.092, moderate) vs a large scratch off the chassis
+  (30% × 0.3 × 1.0 = 0.09, also moderate) → reasonable calibration.
+- **Auditable.** The constants (`_TYPE_WEIGHTS`, `_POSITION_BAND`,
+  `_SEVERITY_THRESHOLDS`) are public in `severity.py`. An external reviewer
+  can cross-check them without opening this ADR.
+- **Zero frontend churn.** The canonical severity_factors keys keep
+  compatibility with M1.
 
-### Negativas
+### Negatives
 
-- **Umbrales calibrados a ojo.** No hay validación contra datos reales — el
-  ADR es honesto al respecto. Si se necesita evaluación cuantitativa,
-  requiere sesgar tiempo a etiquetar fixtures con severidad ground truth, lo
-  cual está fuera de scope del demo.
-- **Position_weight binario.** Una banda dura (`0.30–0.70`) puede dar saltos
-  visibles en daños limítrofes. Mitigación posible (no implementada): sigmoid
-  suave centrado en 0.5. No se hace ahora porque añade complejidad sin
-  observación de problema.
-- **Cost ranges no calibrados.** Documentado como placeholder. Aceptable
-  para demo de portfolio.
+- **Eyeballed thresholds.** There is no validation against real data — the
+  ADR is honest about it. If quantitative evaluation is needed, it
+  requires diverting time to label fixtures with ground-truth severity, which
+  is out of scope for the demo.
+- **A binary position_weight.** A hard band (`0.30–0.70`) can produce visible
+  jumps for borderline damage. A possible mitigation (not implemented): a smooth
+  sigmoid centered at 0.5. Not done now because it adds complexity with no
+  observed problem.
+- **Uncalibrated cost ranges.** Documented as a placeholder. Acceptable
+  for a portfolio demo.
 
-## Alternativas consideradas
+## Alternatives considered
 
-### Score aditivo (suma ponderada)
+### Additive score (weighted sum)
 
-Rechazado. Un rayón cosmético del 30% obtiene severidad similar a un vidrio
-roto del 8% si los pesos se suman — la intuición humana es claramente
-multiplicativa: daños grandes en zona crítica son exponencialmente peores.
+Rejected. A 30% cosmetic scratch gets a severity similar to 8% broken
+glass if the weights are summed — human intuition is clearly
+multiplicative: large damage in a critical zone is exponentially worse.
 
-### Umbrales por área cruda (handoff M3 propuesta original)
+### Thresholds on raw area (original M3 handoff proposal)
 
-Rechazado. Clasificar por `area < 5%` → LEVE elimina la influencia del
-type_weight en el resultado final, anulando el matiz vidrio-roto vs rayón.
+Rejected. Classifying by `area < 5%` → LEVE removes the influence of
+type_weight on the final result, nullifying the broken-glass vs scratch nuance.
 
-### Modelo aprendido (regression sobre severity)
+### Learned model (regression on severity)
 
-Rechazado por falta de ground truth. Re-evaluable si en M5+ se obtiene un
-dataset etiquetado en severidad.
+Rejected for lack of ground truth. Re-evaluable if an M5+ stage obtains a
+dataset labeled for severity.
 
-## Referencias
+## References
 
-- Spec maestro sec M3 — exit criterion de severidad explicable.
-- ADR 0001 — pretrained-first (no aprender severidad sin datos).
-- ADR 0010 — sam2-zero-shot (provee la mask que entra como input).
-- ADR 0012 — mask-encoding-polygon-cap (define cuándo el mask es None).
+- Master spec sec M3 — exit criterion for explainable severity.
+- ADR 0001 — pretrained-first (do not learn severity without data).
+- ADR 0010 — sam2-zero-shot (provides the mask that comes in as input).
+- ADR 0012 — mask-encoding-polygon-cap (defines when the mask is None).
